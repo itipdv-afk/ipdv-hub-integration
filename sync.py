@@ -325,12 +325,13 @@ def construir_payload(persona: dict, es_actualizacion: bool = False) -> dict:
     payload = {
         "name":          nombre or "Sin nombre",
         "phone_number":  formatear_telefono(persona.get("phone") or ""),
-        "customer_code": rut,
         "note":          f"RUT: {rut}" if rut else "",
     }
-    # Email solo al crear — al actualizar Loyverse lo rechaza si ya existe
+    # Al crear: incluir email y customer_code
+    # Al actualizar: Loyverse los rechaza si ya existen en ese cliente
     if not es_actualizacion:
-        payload["email"] = persona.get("email") or ""
+        payload["email"]         = persona.get("email") or ""
+        payload["customer_code"] = rut
     return payload
 
 
