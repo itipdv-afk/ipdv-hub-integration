@@ -55,7 +55,6 @@ PCO_PAGE_SIZE        = int(os.getenv("PCO_PAGE_SIZE", "100"))
 
 # Valores que se tratan como "sin dato" independiente de mayúsculas
 VALORES_VACIOS = {"N/A", "NA", "NONE", "-", "S/I", ""}
-PCO_RUT_FILTER = "15435437-9"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -328,8 +327,6 @@ def crear_o_actualizar_cliente(persona: dict) -> str:
         return "simulado"
 
     try:
-        log.warning(f"Existing:{persona}")
-        log.warning(f"PAYLOAD: {payload}")
         if existing:
             loyverse_put(f"/customers/{existing['id']}", payload)
             return "actualizado"
