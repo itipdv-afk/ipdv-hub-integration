@@ -128,21 +128,6 @@ def loyverse_post(path: str, body: dict) -> dict:
     return resp.json()
 
 
-def loyverse_patch(path: str, body: dict) -> dict:
-    url = LOYVERSE_BASE + path
-    headers = {"Authorization": f"Bearer {LOYVERSE_TOKEN}", "Content-Type": "application/json"}
-    resp = requests.patch(url, headers=headers, json=body, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def loyverse_put(path: str, body: dict) -> dict:
-    url = LOYVERSE_BASE + path
-    headers = {"Authorization": f"Bearer {LOYVERSE_TOKEN}", "Content-Type": "application/json"}
-    resp = requests.put(url, headers=headers, json=body, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
 def calcular_edad(birthdate_str: str):
     if not birthdate_str:
         return None
@@ -329,36 +314,44 @@ def buscar_cliente_existente(persona: dict):
     return None
 
 
-def construir_payload(persona: dict) -> dict:
-    """Construye el body para crear/actualizar un cliente en Loyverse."""
+def construir_payload(persona: dict, es_actualizacion: bool = False) -> dict:
+    """
+    Construye el body para crear/actualizar un cliente en Loyverse.
+    Al actualizar NO se incluye el email — Loyverse rechaza POST con email
+    duplicado aunque sea el mismo cliente.
+    """
     nombre = f"{persona['first_name']} {persona['last_name']}".strip()
     rut    = persona.get("rut") or ""
-    return {
+    payload = {
         "name":          nombre or "Sin nombre",
-        "email":         persona.get("email") or "",
         "phone_number":  formatear_telefono(persona.get("phone") or ""),
         "customer_code": rut,
         "note":          f"RUT: {rut}" if rut else "",
     }
+    # Email solo al crear — al actualizar Loyverse lo rechaza si ya existe
+    if not es_actualizacion:
+        payload["email"] = persona.get("email") or ""
+    return payload
 
 
 def crear_o_actualizar_cliente(persona: dict) -> str:
     """Crea o actualiza un cliente en Loyverse. Retorna el resultado."""
-    payload  = construir_payload(persona)
     existing = buscar_cliente_existente(persona)
 
     if DRY_RUN:
+        payload = construir_payload(persona, es_actualizacion=bool(existing))
         accion = "ACTUALIZAR" if existing else "CREAR"
         log.info(f"[DRY RUN] {accion}: {payload}")
         return "simulado"
 
     try:
         if existing:
-            # Loyverse actualiza con POST al mismo endpoint, incluyendo el id en el body
+            payload = construir_payload(persona, es_actualizacion=True)
             payload["id"] = existing["id"]
             loyverse_post("/customers", payload)
             return "actualizado"
         else:
+            payload = construir_payload(persona, es_actualizacion=False)
             loyverse_post("/customers", payload)
             return "creado"
     except requests.HTTPError as e:
