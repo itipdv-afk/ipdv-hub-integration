@@ -67,6 +67,19 @@ LOYVERSE_BASE = "https://api.loyverse.com/v1.0"
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 def normalizar(valor) -> str | None:
+    """
+    Normaliza cualquier valor recibido desde la API:
+      - None, vacío, "N/A", "NA", "NONE", "-", "S/I" → retorna None
+      - Cualquier otro string → retorna el valor sin espacios extra
+    """
+    if not valor:
+        return None
+    limpio = str(valor).strip()
+    if limpio.upper() in VALORES_VACIOS:
+        return None
+    return limpio
+
+
 def formatear_telefono(telefono: str) -> str:
     """
     Formatea el teléfono al formato internacional requerido por Loyverse.
@@ -90,18 +103,6 @@ def formatear_telefono(telefono: str) -> str:
         return f"+56{limpio}"
     # Cualquier otro caso, agregar +56
     return f"+56{limpio}"
-
-    """
-    Normaliza cualquier valor recibido desde la API:
-      - None, vacío, "N/A", "NA", "NONE", "-", "S/I" → retorna None
-      - Cualquier otro string → retorna el valor sin espacios extra
-    """
-    if not valor:
-        return None
-    limpio = str(valor).strip()
-    if limpio.upper() in VALORES_VACIOS:
-        return None
-    return limpio
 
 
 def pco_get(path: str, params: dict = None) -> dict:
