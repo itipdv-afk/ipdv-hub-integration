@@ -183,8 +183,7 @@ def obtener_personas_pco() -> list:
             edad = calcular_edad(birthdate)
 
             # Email principal
-            email_raw = email_principal
-            email_principal = email_raw.strip() if email_raw and email_raw.strip().upper() not in ("N/A", "NA", "", "NONE") else None
+            email_principal = None
             for erel in person.get("relationships", {}).get("emails", {}).get("data", []):
                 e = emails_idx.get(erel["id"])
                 if e:
@@ -195,8 +194,7 @@ def obtener_personas_pco() -> list:
                         break
 
             # Teléfono principal
-            telefono_raw = telefono_principal
-            telefono_principal = telefono_raw.strip() if telefono_raw and telefono_raw.strip() not in ("N/A", "NA", "", "NONE") else None
+            telefono_principal = None
             for prel in person.get("relationships", {}).get("phone_numbers", {}).get("data", []):
                 p = phones_idx.get(prel["id"])
                 if p:
@@ -210,6 +208,12 @@ def obtener_personas_pco() -> list:
             # Después
             rut_raw = obtener_campo_rut(pid, field_definitions)
             rut = rut_raw.strip() if rut_raw and rut_raw.strip().upper() not in ("N/A", "NA", "", "NONE") else None
+
+            email_raw = email_principal
+            email_principal = email_raw.strip() if email_raw and email_raw.strip().upper() not in ("N/A", "NA", "", "NONE") else None
+
+            telefono_raw = telefono_principal
+            telefono_principal = telefono_raw.strip() if telefono_raw and telefono_raw.strip() not in ("N/A", "NA", "", "NONE") else None
 
             personas.append({
                 "pco_id":     pid,
