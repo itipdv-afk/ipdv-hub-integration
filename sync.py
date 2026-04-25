@@ -285,26 +285,38 @@ def obtener_personas_pco() -> list:
 # ─── LOYVERSE ─────────────────────────────────────────────────────────────────
 
 def buscar_cliente_por_rut(rut: str):
-    """Busca cliente en Loyverse por customer_code (RUT). Criterio principal."""
+    """
+    Busca cliente en Loyverse por customer_code (RUT).
+    Loyverse hace búsqueda parcial, por eso verificamos coincidencia exacta.
+    """
     if not rut:
         return None
     try:
-        resp = loyverse_get("/customers", params={"customer_code": rut, "limit": 1})
+        resp = loyverse_get("/customers", params={"customer_code": rut, "limit": 50})
         customers = resp.get("customers", [])
-        return customers[0] if customers else None
+        for cliente in customers:
+            if cliente.get("customer_code") == rut:
+                return cliente
+        return None
     except Exception as e:
         log.warning(f"Error buscando cliente por RUT {rut}: {e}")
         return None
 
 
 def buscar_cliente_por_email(email: str):
-    """Busca cliente en Loyverse por email. Fallback cuando no hay RUT."""
+    """
+    Busca cliente en Loyverse por email.
+    Verifica coincidencia exacta (case-insensitive).
+    """
     if not email:
         return None
     try:
-        resp = loyverse_get("/customers", params={"email": email, "limit": 1})
+        resp = loyverse_get("/customers", params={"email": email, "limit": 50})
         customers = resp.get("customers", [])
-        return customers[0] if customers else None
+        for cliente in customers:
+            if cliente.get("email", "").lower() == email.lower():
+                return cliente
+        return None
     except Exception as e:
         log.warning(f"Error buscando cliente por email {email}: {e}")
         return None
@@ -354,9 +366,8 @@ def crear_o_actualizar_cliente(persona: dict) -> str:
 
     try:
         if existing:
+            # Loyverse actualiza con POST al mismo endpoint, incluyendo el id en el body
             payload["id"] = existing["id"]
-            log.info(f"PAYLOAD FINAL: {payload}")      
-            log.info(f"EXISTING ID: {existing['id']}") 
             loyverse_post("/customers", payload)
             return "actualizado"
         else:
