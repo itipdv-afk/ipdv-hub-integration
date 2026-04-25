@@ -183,7 +183,8 @@ def obtener_personas_pco() -> list:
             edad = calcular_edad(birthdate)
 
             # Email principal
-            email_principal = None
+            email_raw = email_principal
+            email_principal = email_raw.strip() if email_raw and email_raw.strip().upper() not in ("N/A", "NA", "", "NONE") else None
             for erel in person.get("relationships", {}).get("emails", {}).get("data", []):
                 e = emails_idx.get(erel["id"])
                 if e:
