@@ -270,30 +270,36 @@ def obtener_personas_pco() -> list:
 # ─── LOYVERSE ─────────────────────────────────────────────────────────────────
 
 def buscar_cliente_por_rut(rut: str):
-    """Busca cliente en Loyverse por customer_code (RUT). Criterio principal."""
+    """Busca cliente en Loyverse por customer_code (RUT). Verifica coincidencia exacta."""
     if not rut:
         return None
     try:
-        resp = loyverse_get("/customers", params={"customer_code": rut, "limit": 1})
+        resp = loyverse_get("/customers", params={"customer_code": rut, "limit": 50})
         customers = resp.get("customers", [])
-        return customers[0] if customers else None
+        # Loyverse hace búsqueda parcial — filtrar coincidencia exacta
+        for cliente in customers:
+            if cliente.get("customer_code") == rut:
+                return cliente
+        return None
     except Exception as e:
         log.warning(f"Error buscando cliente por RUT {rut}: {e}")
         return None
 
-
 def buscar_cliente_por_email(email: str):
-    """Busca cliente en Loyverse por email. Fallback cuando no hay RUT."""
+    """Busca cliente en Loyverse por email. Verifica coincidencia exacta."""
     if not email:
         return None
     try:
-        resp = loyverse_get("/customers", params={"email": email, "limit": 1})
+        resp = loyverse_get("/customers", params={"email": email, "limit": 50})
         customers = resp.get("customers", [])
-        return customers[0] if customers else None
+        # Verificar coincidencia exacta por las dudas
+        for cliente in customers:
+            if cliente.get("email", "").lower() == email.lower():
+                return cliente
+        return None
     except Exception as e:
         log.warning(f"Error buscando cliente por email {email}: {e}")
         return None
-
 
 def buscar_cliente_existente(persona: dict):
     """
@@ -349,6 +355,7 @@ def crear_o_actualizar_cliente(persona: dict) -> str:
         if existing:
             payload = construir_payload(persona, es_actualizacion=True)
             payload["id"] = existing["id"]
+            log.info(f"PAYLOAD ACTUALIZACIÓN: {payload}") 
             loyverse_post("/customers", payload)
             return "actualizado"
         else:
