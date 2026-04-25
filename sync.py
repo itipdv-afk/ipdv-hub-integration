@@ -5,7 +5,7 @@
 ==============================================================================
   Descripción:
     - Lee personas desde Planning Center Online (PCO) People API
-    - Filtra solo mayores de 18 años
+    - Filtra solo mayores de 18 años que se encuentren activos
     - Crea o actualiza clientes en Loyverse POS
     - El RUT queda en el campo "customer_code" y en "note" del cliente
     - Datos traspasados: Nombre, Apellidos, Teléfono principal,
@@ -153,7 +153,12 @@ def obtener_personas_pco() -> list:
     offset = 0
 
     while True:
-        params = {"per_page": PCO_PAGE_SIZE, "offset": offset, "include": "emails,phone_numbers"}
+        params = {
+            "per_page": PCO_PAGE_SIZE, 
+            "offset": offset, 
+            "include": "emails,phone_numbers",
+            "where[status]": "active"
+        }
         log.info(f"PCO: descargando personas offset={offset}...")
         data = pco_get("/people", params=params)
 
