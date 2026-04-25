@@ -355,6 +355,8 @@ def crear_o_actualizar_cliente(persona: dict) -> str:
     try:
         if existing:
             payload["id"] = existing["id"]
+            log.info(f"PAYLOAD FINAL: {payload}")      
+            log.info(f"EXISTING ID: {existing['id']}") 
             loyverse_post("/customers", payload)
             return "actualizado"
         else:
