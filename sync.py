@@ -42,9 +42,9 @@ log = logging.getLogger(__name__)
 #  CONFIGURACIÓN — todas las variables vienen de variables de entorno
 # ══════════════════════════════════════════════════════════════════════════════
 
-PCO_APP_ID          = os.environ["PCO_APP_ID"]
-PCO_SECRET          = os.environ["PCO_SECRET"]
-LOYVERSE_TOKEN      = os.environ["LOYVERSE_TOKEN"]
+PCO_APP_ID           = os.environ["PCO_APP_ID"]
+PCO_SECRET           = os.environ["PCO_SECRET"]
+LOYVERSE_TOKEN       = os.environ["LOYVERSE_TOKEN"]
 
 PCO_RUT_FIELD_NAME   = os.getenv("PCO_RUT_FIELD_NAME", "RUT")
 EDAD_MINIMA          = int(os.getenv("EDAD_MINIMA", "18"))
@@ -52,13 +52,30 @@ DRY_RUN              = os.getenv("DRY_RUN", "false").lower() == "true"
 DELAY_ENTRE_LLAMADAS = float(os.getenv("DELAY_ENTRE_LLAMADAS", "0.5"))
 PCO_PAGE_SIZE        = int(os.getenv("PCO_PAGE_SIZE", "100"))
 
+# Valores que se tratan como "sin dato" independiente de mayúsculas
+VALORES_VACIOS = {"N/A", "NA", "NONE", "-", "S/I", ""}
+
 # ══════════════════════════════════════════════════════════════════════════════
 
 PCO_BASE      = "https://api.planningcenteronline.com/people/v2"
 LOYVERSE_BASE = "https://api.loyverse.com/v1.0"
 
 
-# ─── HELPERS HTTP ─────────────────────────────────────────────────────────────
+# ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+def normalizar(valor) -> str | None:
+    """
+    Normaliza cualquier valor recibido desde la API:
+      - None, vacío, "N/A", "NA", "NONE", "-", "S/I" → retorna None
+      - Cualquier otro string → retorna el valor sin espacios extra
+    """
+    if not valor:
+        return None
+    limpio = str(valor).strip()
+    if limpio.upper() in VALORES_VACIOS:
+        return None
+    return limpio
+
 
 def pco_get(path: str, params: dict = None) -> dict:
     url = PCO_BASE + path
@@ -123,7 +140,7 @@ def cargar_field_definitions() -> dict:
 
 
 def obtener_campo_rut(person_id: str, field_definitions: dict):
-    """Busca el valor del campo RUT en los datos personalizados de una persona."""
+    """Busca el valor crudo del campo RUT en los datos personalizados de una persona."""
     if not field_definitions:
         return None
     rut_field_id = next(
@@ -149,8 +166,8 @@ def obtener_campo_rut(person_id: str, field_definitions: dict):
 
 def obtener_personas_pco() -> list:
     """
-    Descarga todas las personas ACTIVAS desde PCO con sus emails,
-    teléfonos y campos personalizados.
+    Descarga todas las personas ACTIVAS desde PCO.
+    Todos los campos de texto se normalizan: vacío/"N/A"/similares → None.
     """
     field_definitions = cargar_field_definitions()
     personas = []
@@ -158,10 +175,10 @@ def obtener_personas_pco() -> list:
 
     while True:
         params = {
-            "per_page":       PCO_PAGE_SIZE,
-            "offset":         offset,
-            "include":        "emails,phone_numbers",
-            "where[status]":  "active",         # ← solo personas activas
+            "per_page":      PCO_PAGE_SIZE,
+            "offset":        offset,
+            "include":       "emails,phone_numbers",
+            "where[status]": "active",
         }
         log.info(f"PCO: descargando personas activas offset={offset}...")
         data = pco_get("/people", params=params)
@@ -178,42 +195,36 @@ def obtener_personas_pco() -> list:
             attrs = person.get("attributes", {})
             pid   = person["id"]
 
-            # Fecha de nacimiento y edad
+            # ── Edad ──────────────────────────────────────────────────────────
             birthdate = attrs.get("birthdate")
             edad = calcular_edad(birthdate)
 
-            # Email principal
-            email_principal = None
+            # ── Email: PRIMERO leer valor crudo, LUEGO normalizar ─────────────
+            email_raw = None
             for erel in person.get("relationships", {}).get("emails", {}).get("data", []):
                 e = emails_idx.get(erel["id"])
                 if e:
                     e_attrs = e.get("attributes", {})
-                    if e_attrs.get("primary") or email_principal is None:
-                        email_principal = e_attrs.get("address")
+                    if e_attrs.get("primary") or email_raw is None:
+                        email_raw = e_attrs.get("address")
                     if e_attrs.get("primary"):
                         break
+            email = normalizar(email_raw)  # ← normalización DESPUÉS de leer
 
-            # Teléfono principal
-            telefono_principal = None
+            # ── Teléfono: PRIMERO leer valor crudo, LUEGO normalizar ──────────
+            telefono_raw = None
             for prel in person.get("relationships", {}).get("phone_numbers", {}).get("data", []):
                 p = phones_idx.get(prel["id"])
                 if p:
                     p_attrs = p.get("attributes", {})
-                    if p_attrs.get("primary") or telefono_principal is None:
-                        telefono_principal = p_attrs.get("number")
+                    if p_attrs.get("primary") or telefono_raw is None:
+                        telefono_raw = p_attrs.get("number")
                     if p_attrs.get("primary"):
                         break
+            telefono = normalizar(telefono_raw)  # ← normalización DESPUÉS de leer
 
-            # RUT desde campo personalizado
-            # Después
-            rut_raw = obtener_campo_rut(pid, field_definitions)
-            rut = rut_raw.strip() if rut_raw and rut_raw.strip().upper() not in ("N/A", "NA", "", "NONE") else None
-
-            email_raw = email_principal
-            email_principal = email_raw.strip() if email_raw and email_raw.strip().upper() not in ("N/A", "NA", "", "NONE") else None
-
-            telefono_raw = telefono_principal
-            telefono_principal = telefono_raw.strip() if telefono_raw and telefono_raw.strip() not in ("N/A", "NA", "", "NONE") else None
+            # ── RUT: PRIMERO leer valor crudo, LUEGO normalizar ───────────────
+            rut = normalizar(obtener_campo_rut(pid, field_definitions))
 
             personas.append({
                 "pco_id":     pid,
@@ -221,8 +232,8 @@ def obtener_personas_pco() -> list:
                 "last_name":  attrs.get("last_name", "").strip(),
                 "birthdate":  birthdate,
                 "edad":       edad,
-                "email":      email_principal,
-                "phone":      telefono_principal,
+                "email":      email,
+                "phone":      telefono,
                 "rut":        rut,
             })
 
@@ -252,7 +263,7 @@ def buscar_cliente_por_rut(rut: str):
 
 
 def buscar_cliente_por_email(email: str):
-    """Busca cliente en Loyverse por email. Usado como fallback."""
+    """Busca cliente en Loyverse por email. Fallback cuando no hay RUT."""
     if not email:
         return None
     try:
@@ -334,17 +345,28 @@ def main():
     # 1. Obtener personas activas desde PCO
     todas = obtener_personas_pco()
 
-    # 2. Clasificar exclusiones
-    sin_edad     = [p for p in todas if p["edad"] is None]
-    menores      = [p for p in todas if p["edad"] is not None and p["edad"] < EDAD_MINIMA]
-    sin_rut      = [p for p in todas if p["edad"] is not None and p["edad"] >= EDAD_MINIMA
-                                     and not p.get("rut")]
-    sin_email    = [p for p in todas if p["edad"] is not None and p["edad"] >= EDAD_MINIMA
-                                     and p.get("rut") and not p.get("email")]
-    a_sincronizar = [p for p in todas if p["edad"] is not None
-                                      and p["edad"] >= EDAD_MINIMA
-                                      and p.get("rut")
-                                      and p.get("email")]
+    # 2. Clasificar exclusiones en orden de prioridad
+    sin_edad  = [p for p in todas
+                 if p["edad"] is None]
+
+    menores   = [p for p in todas
+                 if p["edad"] is not None
+                 and p["edad"] < EDAD_MINIMA]
+
+    sin_rut   = [p for p in todas
+                 if p["edad"] is not None and p["edad"] >= EDAD_MINIMA
+                 and not p.get("rut")]
+
+    sin_email = [p for p in todas
+                 if p["edad"] is not None and p["edad"] >= EDAD_MINIMA
+                 and p.get("rut")
+                 and not p.get("email")]
+
+    a_sincronizar = [p for p in todas
+                     if p["edad"] is not None
+                     and p["edad"] >= EDAD_MINIMA
+                     and p.get("rut")
+                     and p.get("email")]
 
     # 3. Resumen de exclusiones
     log.info("")
@@ -359,7 +381,6 @@ def main():
     log.info(f"  A sincronizar con Loyverse:          {len(a_sincronizar)}")
     log.info("─" * 60)
 
-    # Detalle de excluidos por falta de RUT o email (para completar en PCO)
     if sin_rut:
         log.warning("  Personas sin RUT (completar en PCO):")
         for p in sin_rut:
