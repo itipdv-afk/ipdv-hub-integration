@@ -1,0 +1,12 @@
+# Nunca subir credenciales
+.env
+
+# Logs generados
+logs/
+*.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python

@@ -1,0 +1,9 @@
+services:
+  sync:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      # Los logs quedan guardados en tu PC en la carpeta ./logs
+      - ./logs:/app/logs
+    restart: "no"   # Se ejecuta una vez y termina (no es un servidor)
