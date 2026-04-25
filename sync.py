@@ -46,6 +46,7 @@ PCO_APP_ID           = os.environ["PCO_APP_ID"]
 PCO_SECRET           = os.environ["PCO_SECRET"]
 LOYVERSE_TOKEN       = os.environ["LOYVERSE_TOKEN"]
 
+PCO_RUT_FILTER       = normalizar(os.getenv("PCO_RUT_FILTER", ""))
 PCO_RUT_FIELD_NAME   = os.getenv("PCO_RUT_FIELD_NAME", "RUT")
 EDAD_MINIMA          = int(os.getenv("EDAD_MINIMA", "18"))
 DRY_RUN              = os.getenv("DRY_RUN", "false").lower() == "true"
@@ -54,6 +55,8 @@ PCO_PAGE_SIZE        = int(os.getenv("PCO_PAGE_SIZE", "100"))
 
 # Valores que se tratan como "sin dato" independiente de mayúsculas
 VALORES_VACIOS = {"N/A", "NA", "NONE", "-", "S/I", ""}
+PCO_RUT_FILTER = "15435437-9"
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -107,6 +110,15 @@ def loyverse_patch(path: str, body: dict) -> dict:
     resp.raise_for_status()
     return resp.json()
 
+def loyverse_put(path: str, body: dict) -> dict:
+    url = LOYVERSE_BASE + path
+    headers = {
+        "Authorization": f"Bearer {LOYVERSE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    resp = requests.put(url, headers=headers, json=body, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
 
 def calcular_edad(birthdate_str: str):
     if not birthdate_str:
@@ -318,19 +330,26 @@ def crear_o_actualizar_cliente(persona: dict) -> str:
         return "simulado"
 
     try:
+        log.warning(f"Existing:{persona}")
+        log.warning(f"PAYLOAD: {payload}")
         if existing:
-            loyverse_patch(f"/customers/{existing['id']}", payload)
+            loyverse_put(f"/customers/{existing['id']}", payload)
+"""            loyverse_patch(f"/customers/{existing['id']}", payload) """
             return "actualizado"
         else:
             loyverse_post("/customers", payload)
             return "creado"
     except requests.HTTPError as e:
-        log.error(f"Error HTTP al procesar {payload.get('name')}: {e.response.text}")
-        return "error"
-    except Exception as e:
-        log.error(f"Error inesperado al procesar {payload.get('name')}: {e}")
+        log.error(f"HTTP ERROR: {e}")
         return "error"
 
+    except requests.RequestException as e:
+        log.error(f"REQUEST ERROR (red/conexión): {e}")
+        return "error"
+
+    except Exception as e:
+        log.error(f"ERROR GENERAL: {e}")
+        return "error"
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
@@ -344,6 +363,11 @@ def main():
 
     # 1. Obtener personas activas desde PCO
     todas = obtener_personas_pco()
+
+    # Filtro de prueba: si se define PCO_RUT_FILTER, procesar solo esa persona
+    if PCO_RUT_FILTER:
+        log.warning(f"⚠️  FILTRO ACTIVO: procesando solo RUT {PCO_RUT_FILTER}")
+        todas = [p for p in todas if p.get("rut") == PCO_RUT_FILTER]
 
     # 2. Clasificar exclusiones en orden de prioridad
     sin_edad  = [p for p in todas
