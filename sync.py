@@ -195,7 +195,8 @@ def obtener_personas_pco() -> list:
                         break
 
             # Teléfono principal
-            telefono_principal = None
+            telefono_raw = telefono_principal
+            telefono_principal = telefono_raw.strip() if telefono_raw and telefono_raw.strip() not in ("N/A", "NA", "", "NONE") else None
             for prel in person.get("relationships", {}).get("phone_numbers", {}).get("data", []):
                 p = phones_idx.get(prel["id"])
                 if p:
