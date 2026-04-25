@@ -17,6 +17,7 @@
 ==============================================================================
 """
 
+import re
 import os
 import sys
 import time
@@ -66,6 +67,30 @@ LOYVERSE_BASE = "https://api.loyverse.com/v1.0"
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 def normalizar(valor) -> str | None:
+def formatear_telefono(telefono: str) -> str:
+    """
+    Formatea el teléfono al formato internacional requerido por Loyverse.
+    Ejemplos:
+      "9 9018 2697"   → "+56999182697"
+      "+56 9 9018 2697" → "+56999182697"
+      "56912345678"   → "+56912345678"
+    """
+    if not telefono:
+        return ""
+    # Eliminar todo excepto dígitos y el signo +
+    limpio = re.sub(r"[^\d+]", "", telefono)
+    # Si ya tiene código de país, dejarlo como está
+    if limpio.startswith("+"):
+        return limpio
+    # Si empieza con 56 (código Chile), agregar +
+    if limpio.startswith("56"):
+        return f"+{limpio}"
+    # Si empieza con 9 (celular chileno sin código), agregar +56
+    if limpio.startswith("9") and len(limpio) == 9:
+        return f"+56{limpio}"
+    # Cualquier otro caso, agregar +56
+    return f"+56{limpio}"
+
     """
     Normaliza cualquier valor recibido desde la API:
       - None, vacío, "N/A", "NA", "NONE", "-", "S/I" → retorna None
@@ -310,7 +335,7 @@ def construir_payload(persona: dict) -> dict:
     return {
         "name":          nombre or "Sin nombre",
         "email":         persona.get("email") or "",
-        "phone_number":  persona.get("phone") or "",
+        "phone_number":  formatear_telefono(persona.get("phone") or ""),
         "customer_code": rut,
         "note":          f"RUT: {rut}" if rut else "",
     }
