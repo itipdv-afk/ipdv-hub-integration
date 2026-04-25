@@ -46,7 +46,7 @@ PCO_APP_ID           = os.environ["PCO_APP_ID"]
 PCO_SECRET           = os.environ["PCO_SECRET"]
 LOYVERSE_TOKEN       = os.environ["LOYVERSE_TOKEN"]
 
-PCO_RUT_FILTER       = normalizar(os.getenv("PCO_RUT_FILTER", ""))
+PCO_RUT_FILTER       = os.getenv("PCO_RUT_FILTER", "").strip() or None
 PCO_RUT_FIELD_NAME   = os.getenv("PCO_RUT_FIELD_NAME", "RUT")
 EDAD_MINIMA          = int(os.getenv("EDAD_MINIMA", "18"))
 DRY_RUN              = os.getenv("DRY_RUN", "false").lower() == "true"
@@ -110,12 +110,10 @@ def loyverse_patch(path: str, body: dict) -> dict:
     resp.raise_for_status()
     return resp.json()
 
+
 def loyverse_put(path: str, body: dict) -> dict:
     url = LOYVERSE_BASE + path
-    headers = {
-        "Authorization": f"Bearer {LOYVERSE_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {LOYVERSE_TOKEN}", "Content-Type": "application/json"}
     resp = requests.put(url, headers=headers, json=body, timeout=30)
     resp.raise_for_status()
     return resp.json()
@@ -334,7 +332,6 @@ def crear_o_actualizar_cliente(persona: dict) -> str:
         log.warning(f"PAYLOAD: {payload}")
         if existing:
             loyverse_put(f"/customers/{existing['id']}", payload)
-"""            loyverse_patch(f"/customers/{existing['id']}", payload) """
             return "actualizado"
         else:
             loyverse_post("/customers", payload)
