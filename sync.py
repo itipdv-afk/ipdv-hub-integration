@@ -205,7 +205,9 @@ def obtener_personas_pco() -> list:
                         break
 
             # RUT desde campo personalizado
-            rut = obtener_campo_rut(pid, field_definitions)
+            # Después
+            rut_raw = obtener_campo_rut(pid, field_definitions)
+            rut = rut_raw.strip() if rut_raw and rut_raw.strip().upper() not in ("N/A", "NA", "", "NONE") else None
 
             personas.append({
                 "pco_id":     pid,
