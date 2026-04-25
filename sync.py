@@ -328,7 +328,9 @@ def crear_o_actualizar_cliente(persona: dict) -> str:
 
     try:
         if existing:
-            loyverse_put(f"/customers/{existing['id']}", payload)
+            # Loyverse actualiza con POST al mismo endpoint, incluyendo el id en el body
+            payload["id"] = existing["id"]
+            loyverse_post("/customers", payload)
             return "actualizado"
         else:
             loyverse_post("/customers", payload)
@@ -336,11 +338,9 @@ def crear_o_actualizar_cliente(persona: dict) -> str:
     except requests.HTTPError as e:
         log.error(f"HTTP ERROR: {e}")
         return "error"
-
     except requests.RequestException as e:
         log.error(f"REQUEST ERROR (red/conexión): {e}")
         return "error"
-
     except Exception as e:
         log.error(f"ERROR GENERAL: {e}")
         return "error"
