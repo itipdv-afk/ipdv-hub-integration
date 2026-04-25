@@ -337,6 +337,7 @@ def crear_o_actualizar_cliente(persona: dict) -> str:
             return "creado"
     except requests.HTTPError as e:
         log.error(f"HTTP ERROR: {e}")
+        log.error(f"RESPONSE BODY: {e.response.text}")
         return "error"
     except requests.RequestException as e:
         log.error(f"REQUEST ERROR (red/conexión): {e}")
