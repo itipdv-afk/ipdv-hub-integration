@@ -84,22 +84,23 @@ def formatear_telefono(telefono: str) -> str:
 
 
 def verificar_firma_pco(payload_bytes: bytes, signature_header: str) -> bool:
-    """
-    Verifica la firma contra ambos secrets (created y updated tienen secrets distintos en PCO).
-    """
     if not WEBHOOK_SECRET and not WEBHOOK_SECRET_UPDATED:
         log.warning("WEBHOOK_SECRET no configurado — omitiendo verificación.")
         return True
-
     sig = signature_header or ""
+    log.info(f"Verificando firma. Header recibido: '{sig[:30]}'")
     for secret in filter(None, [WEBHOOK_SECRET, WEBHOOK_SECRET_UPDATED]):
-        expected = hmac.new(
-            secret.encode(),
-            payload_bytes,
-            hashlib.sha256
-        ).hexdigest()
-        if hmac.compare_digest(expected, sig):
-            return True
+        try:
+            expected = hmac.new(
+                secret.encode(),
+                payload_bytes,
+                hashlib.sha256
+            ).hexdigest()
+            log.info(f"Expected: '{expected[:30]}'")
+            if hmac.compare_digest(expected, sig):
+                return True
+        except Exception as e:
+            log.error(f"Error verificando firma: {e}")
     return False
 
 
