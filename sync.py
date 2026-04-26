@@ -7,7 +7,8 @@
     - Solo personas ACTIVAS en PCO
     - Solo personas con fecha de nacimiento y edad >= 18 años
     - Solo personas que tengan RUT y email (ambos obligatorios)
-    - Búsqueda en Loyverse: primero por RUT (customer_code), luego por email
+    - Si dos o más personas en PCO comparten el mismo email → se omiten todas
+    - Búsqueda en Loyverse: solo por email (único filtro real soportado)
     - El RUT queda en customer_code y en note del cliente Loyverse
     - Datos traspasados: Nombre, Apellidos, Teléfono principal,
       Email principal, RUT
@@ -24,6 +25,7 @@ import time
 import logging
 import requests
 from datetime import date, datetime
+from collections import Counter
 from dateutil.relativedelta import relativedelta
 
 # ─── LOGGING ─────────────────────────────────────────────────────────────────
@@ -54,9 +56,8 @@ DRY_RUN              = os.getenv("DRY_RUN", "false").lower() == "true"
 DELAY_ENTRE_LLAMADAS = float(os.getenv("DELAY_ENTRE_LLAMADAS", "0.5"))
 PCO_PAGE_SIZE        = int(os.getenv("PCO_PAGE_SIZE", "100"))
 
-# Valores que se tratan como "sin dato" independiente de mayúsculas
+# Valores que se tratan como "sin dato"
 VALORES_VACIOS = {"N/A", "NA", "NONE", "-", "S/I", ""}
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -84,24 +85,19 @@ def formatear_telefono(telefono: str) -> str:
     """
     Formatea el teléfono al formato internacional requerido por Loyverse.
     Ejemplos:
-      "9 9018 2697"   → "+56999182697"
+      "9 9018 2697"     → "+56999182697"
       "+56 9 9018 2697" → "+56999182697"
-      "56912345678"   → "+56912345678"
+      "56912345678"     → "+56912345678"
     """
     if not telefono:
         return ""
-    # Eliminar todo excepto dígitos y el signo +
     limpio = re.sub(r"[^\d+]", "", telefono)
-    # Si ya tiene código de país, dejarlo como está
     if limpio.startswith("+"):
         return limpio
-    # Si empieza con 56 (código Chile), agregar +
     if limpio.startswith("56"):
         return f"+{limpio}"
-    # Si empieza con 9 (celular chileno sin código), agregar +56
     if limpio.startswith("9") and len(limpio) == 9:
         return f"+56{limpio}"
-    # Cualquier otro caso, agregar +56
     return f"+56{limpio}"
 
 
@@ -127,21 +123,6 @@ def loyverse_post(path: str, body: dict) -> dict:
     resp.raise_for_status()
     return resp.json()
 
-
-def loyverse_patch(path: str, body: dict) -> dict:
-    url = LOYVERSE_BASE + path
-    headers = {"Authorization": f"Bearer {LOYVERSE_TOKEN}", "Content-Type": "application/json"}
-    resp = requests.patch(url, headers=headers, json=body, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def loyverse_put(path: str, body: dict) -> dict:
-    url = LOYVERSE_BASE + path
-    headers = {"Authorization": f"Bearer {LOYVERSE_TOKEN}", "Content-Type": "application/json"}
-    resp = requests.put(url, headers=headers, json=body, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
 
 def calcular_edad(birthdate_str: str):
     if not birthdate_str:
@@ -230,11 +211,11 @@ def obtener_personas_pco() -> list:
             attrs = person.get("attributes", {})
             pid   = person["id"]
 
-            # ── Edad ──────────────────────────────────────────────────────────
+            # Edad
             birthdate = attrs.get("birthdate")
             edad = calcular_edad(birthdate)
 
-            # ── Email: PRIMERO leer valor crudo, LUEGO normalizar ─────────────
+            # Email: primero leer, luego normalizar
             email_raw = None
             for erel in person.get("relationships", {}).get("emails", {}).get("data", []):
                 e = emails_idx.get(erel["id"])
@@ -244,9 +225,9 @@ def obtener_personas_pco() -> list:
                         email_raw = e_attrs.get("address")
                     if e_attrs.get("primary"):
                         break
-            email = normalizar(email_raw)  # ← normalización DESPUÉS de leer
+            email = normalizar(email_raw)
 
-            # ── Teléfono: PRIMERO leer valor crudo, LUEGO normalizar ──────────
+            # Teléfono: primero leer, luego normalizar
             telefono_raw = None
             for prel in person.get("relationships", {}).get("phone_numbers", {}).get("data", []):
                 p = phones_idx.get(prel["id"])
@@ -256,9 +237,9 @@ def obtener_personas_pco() -> list:
                         telefono_raw = p_attrs.get("number")
                     if p_attrs.get("primary"):
                         break
-            telefono = normalizar(telefono_raw)  # ← normalización DESPUÉS de leer
+            telefono = normalizar(telefono_raw)
 
-            # ── RUT: PRIMERO leer valor crudo, LUEGO normalizar ───────────────
+            # RUT: primero leer, luego normalizar
             rut = normalizar(obtener_campo_rut(pid, field_definitions))
 
             personas.append({
@@ -284,29 +265,10 @@ def obtener_personas_pco() -> list:
 
 # ─── LOYVERSE ─────────────────────────────────────────────────────────────────
 
-def buscar_cliente_por_rut(rut: str):
-    """
-    Busca cliente en Loyverse por customer_code (RUT).
-    Loyverse hace búsqueda parcial, por eso verificamos coincidencia exacta.
-    """
-    if not rut:
-        return None
-    try:
-        resp = loyverse_get("/customers", params={"customer_code": rut, "limit": 50})
-        customers = resp.get("customers", [])
-        for cliente in customers:
-            if cliente.get("customer_code") == rut:
-                return cliente
-        return None
-    except Exception as e:
-        log.warning(f"Error buscando cliente por RUT {rut}: {e}")
-        return None
-
-
 def buscar_cliente_por_email(email: str):
     """
-    Busca cliente en Loyverse por email.
-    Verifica coincidencia exacta (case-insensitive).
+    Busca cliente en Loyverse por email con coincidencia exacta (case-insensitive).
+    Email es el único filtro real soportado por la API de Loyverse.
     """
     if not email:
         return None
@@ -320,25 +282,6 @@ def buscar_cliente_por_email(email: str):
     except Exception as e:
         log.warning(f"Error buscando cliente por email {email}: {e}")
         return None
-
-
-def buscar_cliente_existente(persona: dict):
-    """
-    Estrategia de búsqueda en orden de confiabilidad:
-    1. RUT (customer_code) — identificador único e inequívoco
-    2. Email              — fallback secundario
-    """
-    cliente = buscar_cliente_por_rut(persona.get("rut"))
-    if cliente:
-        log.debug(f"Match por RUT: {persona.get('rut')}")
-        return cliente
-
-    cliente = buscar_cliente_por_email(persona.get("email"))
-    if cliente:
-        log.debug(f"Match por email (fallback): {persona.get('email')}")
-        return cliente
-
-    return None
 
 
 def construir_payload(persona: dict) -> dict:
@@ -356,8 +299,8 @@ def construir_payload(persona: dict) -> dict:
 
 def crear_o_actualizar_cliente(persona: dict) -> str:
     """Crea o actualiza un cliente en Loyverse. Retorna el resultado."""
+    existing = buscar_cliente_por_email(persona.get("email"))
     payload  = construir_payload(persona)
-    existing = buscar_cliente_existente(persona)
 
     if DRY_RUN:
         accion = "ACTUALIZAR" if existing else "CREAR"
@@ -366,7 +309,6 @@ def crear_o_actualizar_cliente(persona: dict) -> str:
 
     try:
         if existing:
-            # Loyverse actualiza con POST al mismo endpoint, incluyendo el id en el body
             payload["id"] = existing["id"]
             loyverse_post("/customers", payload)
             return "actualizado"
@@ -384,6 +326,7 @@ def crear_o_actualizar_cliente(persona: dict) -> str:
         log.error(f"ERROR GENERAL: {e}")
         return "error"
 
+
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -397,7 +340,7 @@ def main():
     # 1. Obtener personas activas desde PCO
     todas = obtener_personas_pco()
 
-    # Filtro de prueba: si se define PCO_RUT_FILTER, procesar solo esa persona
+    # Filtro de prueba por RUT individual
     if PCO_RUT_FILTER:
         log.warning(f"⚠️  FILTRO ACTIVO: procesando solo RUT {PCO_RUT_FILTER}")
         todas = [p for p in todas if p.get("rut") == PCO_RUT_FILTER]
@@ -419,23 +362,34 @@ def main():
                  and p.get("rut")
                  and not p.get("email")]
 
-    a_sincronizar = [p for p in todas
-                     if p["edad"] is not None
-                     and p["edad"] >= EDAD_MINIMA
-                     and p.get("rut")
-                     and p.get("email")]
+    # Candidatos antes de verificar duplicados de email
+    candidatos = [p for p in todas
+                  if p["edad"] is not None
+                  and p["edad"] >= EDAD_MINIMA
+                  and p.get("rut")
+                  and p.get("email")]
 
-    # 3. Resumen de exclusiones
+    # 3. Detectar emails duplicados en PCO y excluir a todos los que los comparten
+    conteo_emails = Counter(p["email"].lower() for p in candidatos)
+    emails_duplicados = {email for email, count in conteo_emails.items() if count > 1}
+
+    email_duplicado_excluidos = [p for p in candidatos
+                                 if p["email"].lower() in emails_duplicados]
+    a_sincronizar = [p for p in candidatos
+                     if p["email"].lower() not in emails_duplicados]
+
+    # 4. Resumen de exclusiones
     log.info("")
     log.info("─" * 60)
     log.info("  ANÁLISIS DE PERSONAS ACTIVAS EN PCO")
     log.info("─" * 60)
-    log.info(f"  Total personas activas:              {len(todas)}")
-    log.info(f"  Sin fecha de nacimiento (excluidos): {len(sin_edad)}")
-    log.info(f"  Menores de {EDAD_MINIMA} años (excluidos):       {len(menores)}")
-    log.info(f"  Sin RUT (excluidos):                 {len(sin_rut)}")
-    log.info(f"  Sin email (excluidos):               {len(sin_email)}")
-    log.info(f"  A sincronizar con Loyverse:          {len(a_sincronizar)}")
+    log.info(f"  Total personas activas:               {len(todas)}")
+    log.info(f"  Sin fecha de nacimiento (excluidos):  {len(sin_edad)}")
+    log.info(f"  Menores de {EDAD_MINIMA} años (excluidos):        {len(menores)}")
+    log.info(f"  Sin RUT (excluidos):                  {len(sin_rut)}")
+    log.info(f"  Sin email (excluidos):                {len(sin_email)}")
+    log.info(f"  Email duplicado en PCO (excluidos):   {len(email_duplicado_excluidos)}")
+    log.info(f"  A sincronizar con Loyverse:           {len(a_sincronizar)}")
     log.info("─" * 60)
 
     if sin_rut:
@@ -448,11 +402,16 @@ def main():
         for p in sin_email:
             log.warning(f"    - {p['first_name']} {p['last_name']} | RUT: {p.get('rut') or 'N/A'}")
 
+    if email_duplicado_excluidos:
+        log.warning("  Personas con email duplicado en PCO (corregir en PCO):")
+        for p in email_duplicado_excluidos:
+            log.warning(f"    - {p['first_name']} {p['last_name']} | email: {p['email']} | RUT: {p['rut']}")
+
     if not a_sincronizar:
         log.warning("No hay personas que cumplan todos los requisitos. Fin.")
         return
 
-    # 4. Sincronizar con Loyverse
+    # 5. Sincronizar con Loyverse
     log.info("")
     stats = {"creado": 0, "actualizado": 0, "simulado": 0, "error": 0}
 
@@ -465,7 +424,7 @@ def main():
         stats[resultado] = stats.get(resultado, 0) + 1
         time.sleep(DELAY_ENTRE_LLAMADAS)
 
-    # 5. Resumen final
+    # 6. Resumen final
     log.info("")
     log.info("─" * 60)
     log.info("  RESUMEN FINAL")
