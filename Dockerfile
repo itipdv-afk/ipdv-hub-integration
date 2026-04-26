@@ -12,6 +12,6 @@ COPY webhook.py .
 RUN mkdir -p /app/logs
 
 ENV PYTHONUNBUFFERED=1
+ENV PORT=8080
 
-# Usar gunicorn en lugar de Flask dev server, escuchando en $PORT
-CMD gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 120 webhook:app
+CMD gunicorn --bind 0.0.0.0:${PORT} --workers 1 --timeout 120 webhook:app
