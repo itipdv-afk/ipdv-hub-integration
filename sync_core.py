@@ -47,7 +47,8 @@ PCO_PAGE_SIZE        = int(os.getenv("PCO_PAGE_SIZE", "100"))
 
 # Secret para verificar firma de webhooks de PCO
 # Se obtiene al registrar el webhook en PCO y debe guardarse en Railway
-WEBHOOK_SECRET       = os.getenv("WEBHOOK_SECRET", "")
+WEBHOOK_SECRET          = os.getenv("WEBHOOK_SECRET", "")
+WEBHOOK_SECRET_UPDATED  = os.getenv("WEBHOOK_SECRET_UPDATED", "")
 
 # Valores que se tratan como "sin dato"
 VALORES_VACIOS = {"N/A", "NA", "NONE", "-", "S/I", ""}
@@ -84,18 +85,22 @@ def formatear_telefono(telefono: str) -> str:
 
 def verificar_firma_pco(payload_bytes: bytes, signature_header: str) -> bool:
     """
-    Verifica que el webhook realmente viene de PCO usando HMAC-SHA256.
-    PCO envía la firma en el header 'X-PCO-Webhooks-Authenticity'.
+    Verifica la firma contra ambos secrets (created y updated tienen secrets distintos en PCO).
     """
-    if not WEBHOOK_SECRET:
-        log.warning("WEBHOOK_SECRET no configurado — omitiendo verificación de firma.")
+    if not WEBHOOK_SECRET and not WEBHOOK_SECRET_UPDATED:
+        log.warning("WEBHOOK_SECRET no configurado — omitiendo verificación.")
         return True
-    expected = hmac.new(
-        WEBHOOK_SECRET.encode(),
-        payload_bytes,
-        hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature_header or "")
+
+    sig = signature_header or ""
+    for secret in filter(None, [WEBHOOK_SECRET, WEBHOOK_SECRET_UPDATED]):
+        expected = hmac.new(
+            secret.encode(),
+            payload_bytes,
+            hashlib.sha256
+        ).hexdigest()
+        if hmac.compare_digest(expected, sig):
+            return True
+    return False
 
 
 def pco_get(path: str, params: dict = None) -> dict:
