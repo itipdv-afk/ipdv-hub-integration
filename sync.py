@@ -301,7 +301,8 @@ def crear_o_actualizar_cliente(persona: dict) -> str:
     """Crea o actualiza un cliente en Loyverse. Retorna el resultado."""
     existing = buscar_cliente_por_email(persona.get("email"))
     payload  = construir_payload(persona)
-
+    log.info(f"TELÉFONO RAW: '{persona.get('phone')}' → FORMATEADO: '{payload['phone_number']}'")
+    
     if DRY_RUN:
         accion = "ACTUALIZAR" if existing else "CREAR"
         log.info(f"[DRY RUN] {accion}: {payload}")
