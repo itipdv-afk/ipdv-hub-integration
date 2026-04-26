@@ -134,6 +134,7 @@ def calcular_edad(birthdate_str: str):
 # ─── PLANNING CENTER ──────────────────────────────────────────────────────────
 
 def cargar_field_definitions() -> dict:
+    """Retorna dict {field_def_id -> nombre_campo}"""
     definitions = {}
     offset = 0
     while True:
@@ -151,9 +152,55 @@ def cargar_field_definitions() -> dict:
     return definitions
 
 
-def obtener_campo_rut(person_id: str, field_definitions: dict):
-    if not field_definitions:
-        return None
+def cargar_ruts_bulk(field_definitions: dict) -> dict:
+    """
+    Carga TODOS los valores del campo RUT en una sola pasada paginada.
+    Retorna dict {person_id -> rut_value}.
+    Esto evita hacer una llamada individual por persona (que causa rate limit 429).
+    """
+    rut_field_id = next(
+        (fid for fid, fname in field_definitions.items()
+         if fname.strip().upper() == PCO_RUT_FIELD_NAME.upper()),
+        None
+    )
+    if not rut_field_id:
+        log.warning(f"Campo '{PCO_RUT_FIELD_NAME}' no encontrado en field_definitions.")
+        return {}
+
+    ruts = {}
+    offset = 0
+    while True:
+        data = pco_get("/field_data", params={
+            "per_page":                    100,
+            "offset":                      offset,
+            "filter":                      "no_dates",
+            "where[field_definition_id]":  rut_field_id,
+        })
+        items = data.get("data", [])
+        if not items:
+            break
+        for item in items:
+            person_id = (item.get("relationships", {})
+                         .get("customizable", {})
+                         .get("data", {})
+                         .get("id"))
+            value = item.get("attributes", {}).get("value")
+            if person_id and value:
+                ruts[person_id] = value
+        total = data.get("meta", {}).get("total_count", 0)
+        offset += len(items)
+        if offset >= total:
+            break
+
+    log.info(f"RUTs cargados en bulk: {len(ruts)} registros.")
+    return ruts
+
+
+def obtener_campo_rut_individual(person_id: str, field_definitions: dict):
+    """
+    Obtiene el RUT de una sola persona. Usado únicamente por el webhook
+    (que procesa una persona a la vez, no el bulk del cron).
+    """
     rut_field_id = next(
         (fid for fid, fname in field_definitions.items()
          if fname.strip().upper() == PCO_RUT_FIELD_NAME.upper()),
@@ -190,15 +237,24 @@ def obtener_persona_pco(person_id: str, field_definitions: dict) -> dict | None:
         emails_idx = {i["id"]: i for i in included if i["type"] == "Email"}
         phones_idx = {i["id"]: i for i in included if i["type"] == "PhoneNumber"}
 
-        return _parsear_persona(person, emails_idx, phones_idx, field_definitions)
+        # Para el webhook usamos lookup individual (solo una persona)
+        rut_valor = normalizar(obtener_campo_rut_individual(person_id, field_definitions))
+        return _parsear_persona(person, emails_idx, phones_idx, ruts_bulk={person_id: rut_valor} if rut_valor else {})
     except Exception as e:
         log.error(f"Error obteniendo persona {person_id} de PCO: {e}")
         return None
 
 
 def obtener_personas_pco() -> list:
-    """Descarga todas las personas ACTIVAS desde PCO. Usado por el cron."""
+    """
+    Descarga todas las personas ACTIVAS desde PCO. Usado por el cron.
+    Carga los RUTs en una sola llamada bulk para evitar rate limit.
+    """
     field_definitions = cargar_field_definitions()
+
+    # Cargar TODOS los RUTs de una vez — evita 150+ llamadas individuales
+    ruts_bulk = cargar_ruts_bulk(field_definitions)
+
     personas = []
     offset = 0
 
@@ -221,7 +277,7 @@ def obtener_personas_pco() -> list:
         phones_idx = {i["id"]: i for i in included if i["type"] == "PhoneNumber"}
 
         for person in items:
-            p = _parsear_persona(person, emails_idx, phones_idx, field_definitions)
+            p = _parsear_persona(person, emails_idx, phones_idx, ruts_bulk=ruts_bulk)
             if p:
                 personas.append(p)
 
@@ -236,7 +292,7 @@ def obtener_personas_pco() -> list:
 
 
 def _parsear_persona(person: dict, emails_idx: dict, phones_idx: dict,
-                     field_definitions: dict) -> dict | None:
+                     ruts_bulk: dict = None) -> dict | None:
     """Extrae y normaliza los datos de una persona desde la respuesta de PCO."""
     attrs = person.get("attributes", {})
     pid   = person["id"]
@@ -266,7 +322,8 @@ def _parsear_persona(person: dict, emails_idx: dict, phones_idx: dict,
                 break
     telefono = normalizar(telefono_raw)
 
-    rut = normalizar(obtener_campo_rut(pid, field_definitions))
+    # RUT viene del dict bulk (cron) o del dict individual (webhook)
+    rut = normalizar((ruts_bulk or {}).get(pid))
 
     return {
         "pco_id":     pid,
