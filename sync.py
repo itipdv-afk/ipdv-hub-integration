@@ -288,14 +288,17 @@ def construir_payload(persona: dict) -> dict:
     """Construye el body para crear/actualizar un cliente en Loyverse."""
     nombre = f"{persona['first_name']} {persona['last_name']}".strip()
     rut    = persona.get("rut") or ""
-    return {
+    payload = {
         "name":          nombre or "Sin nombre",
         "email":         persona.get("email") or "",
-        "phone_number":  formatear_telefono(persona.get("phone") or ""),
         "customer_code": rut,
         "note":          f"RUT: {rut}" if rut else "",
     }
-
+    # Solo incluir phone_number si tiene valor — Loyverse rechaza string vacío
+    telefono = formatear_telefono(persona.get("phone") or "")
+    if telefono:
+        payload["phone_number"] = telefono
+    return payload
 
 def crear_o_actualizar_cliente(persona: dict) -> str:
     """Crea o actualiza un cliente en Loyverse. Retorna el resultado."""
