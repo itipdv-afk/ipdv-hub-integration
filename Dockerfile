@@ -13,6 +13,5 @@ RUN mkdir -p /app/logs
 
 ENV PYTHONUNBUFFERED=1
 
-# El servidor webhook se mantiene siempre activo.
-# El cron (cron.py) se ejecuta por separado según railway.json.
-CMD ["python", "webhook.py"]
+# Usar gunicorn en lugar de Flask dev server, escuchando en $PORT
+CMD gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 120 webhook:app
