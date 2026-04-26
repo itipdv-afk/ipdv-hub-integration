@@ -3,7 +3,7 @@
 
 # Logs generados
 logs/
-*.txt
+
 
 # Python
 __pycache__/

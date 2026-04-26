@@ -1,19 +1,18 @@
 FROM python:3.12-slim
 
-# Directorio de trabajo dentro del contenedor
 WORKDIR /app
 
-# Copiar dependencias primero (mejor caché de Docker)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar el código
-COPY sync.py .
+COPY sync_core.py .
+COPY cron.py .
+COPY webhook.py .
 
-# El script escribe logs en /app/logs
 RUN mkdir -p /app/logs
 
-# Variable de entorno para que Python no bufferice stdout (ver logs en tiempo real)
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "sync.py"]
+# El servidor webhook se mantiene siempre activo.
+# El cron (cron.py) se ejecuta por separado según railway.json.
+CMD ["python", "webhook.py"]
