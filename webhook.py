@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ==============================================================================
-  WEBHOOK: Servidor HTTP que recibe eventos de PCO en tiempo real
+WEBHOOK: Servidor HTTP que recibe eventos de PCO y Loyverse en tiempo real
 ==============================================================================
 """
 
@@ -13,12 +13,15 @@ from sync_core import (
     log, WEBHOOK_SECRET, WEBHOOK_SECRET_UPDATED,
     cargar_field_definitions, obtener_persona_pco,
     cumple_condiciones, sincronizar_persona,
-    verificar_firma_pco
+    verificar_firma_pco,
+    loyverse_get,
 )
+from receipt_mailer import send_receipt_email
 
 app = Flask(__name__)
 
 _field_definitions = None
+
 
 def get_field_definitions():
     global _field_definitions
@@ -27,10 +30,14 @@ def get_field_definitions():
     return _field_definitions
 
 
+# ── Health check ──────────────────────────────────────────────────────────────
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"}), 200
 
+
+# ── Webhook PCO (sincronización de clientes) ──────────────────────────────────
 
 @app.route("/webhook/pco", methods=["POST"])
 def webhook_pco():
@@ -38,17 +45,15 @@ def webhook_pco():
     signature = request.headers.get("X-Pco-Webhooks-Authenticity", "")
 
     if not verificar_firma_pco(raw_body, signature):
-        log.warning("Webhook rechazado: firma inválida.")
+        log.warning("Webhook PCO rechazado: firma inválida.")
         return jsonify({"error": "Firma inválida"}), 401
 
     try:
         payload = json.loads(raw_body)
     except json.JSONDecodeError:
-        log.warning("Webhook rechazado: JSON inválido.")
+        log.warning("Webhook PCO rechazado: JSON inválido.")
         return jsonify({"error": "JSON inválido"}), 400
 
-    # PCO envía la estructura en data[0].attributes
-    # El payload real de la persona viene como string JSON en attributes.payload
     try:
         evento_data = payload["data"][0]
         evento      = evento_data["attributes"]["name"]
@@ -58,14 +63,13 @@ def webhook_pco():
         log.warning(f"No se pudo parsear el payload de PCO: {e}")
         return jsonify({"error": "Payload inválido"}), 400
 
-    log.info(f"Webhook recibido: {evento} | person_id: {person_id}")
+    log.info(f"Webhook PCO recibido: {evento} | person_id: {person_id}")
 
     if evento not in ("people.v2.events.person.created",
                       "people.v2.events.person.updated"):
-        log.info(f"Evento ignorado: {evento}")
+        log.info(f"Evento PCO ignorado: {evento}")
         return jsonify({"status": "ignorado", "evento": evento}), 200
 
-    # Obtener datos completos de la persona desde PCO
     field_defs = get_field_definitions()
     persona    = obtener_persona_pco(person_id, field_defs)
 
@@ -77,22 +81,91 @@ def webhook_pco():
     log.info(f"Persona: {nombre} | edad={persona['edad']} | "
              f"RUT={persona.get('rut') or 'N/A'} | email={persona.get('email') or 'N/A'}")
 
-    # Verificar condiciones
     cumple, motivo = cumple_condiciones(persona)
     if not cumple:
         log.info(f"Persona excluida ({motivo}): {nombre}")
         return jsonify({"status": "excluido", "motivo": motivo}), 200
 
-    # Sincronizar con Loyverse
     resultado = sincronizar_persona(persona)
     log.info(f"Resultado para {nombre}: {resultado}")
 
     return jsonify({
-        "status":  resultado,
-        "persona": nombre,
-        "pco_id":  person_id,
+        "status":   resultado,
+        "persona":  nombre,
+        "pco_id":   person_id,
     }), 200
 
+
+# ── Webhook Loyverse (envío automático de comprobantes) ───────────────────────
+
+@app.route("/webhook/loyverse", methods=["POST"])
+def webhook_loyverse():
+    """
+    Recibe eventos de receipts desde Loyverse.
+    Si la venta tiene un cliente con email, envía el comprobante automáticamente.
+    """
+    try:
+        payload = request.get_json(force=True, silent=True)
+        if not payload:
+            log.warning("Webhook Loyverse: payload vacío o JSON inválido.")
+            return jsonify({"error": "JSON inválido"}), 400
+    except Exception as e:
+        log.warning(f"Webhook Loyverse: error parseando JSON: {e}")
+        return jsonify({"error": "JSON inválido"}), 400
+
+    # Loyverse envía el receipt directamente en el payload
+    # La estructura es: { "receipts": [...] }  o directamente el objeto receipt
+    receipts = payload.get("receipts") if isinstance(payload, dict) else None
+    if receipts is None:
+        # A veces Loyverse manda el receipt directamente como objeto raíz
+        receipts = [payload]
+
+    processed = 0
+    skipped   = 0
+
+    for receipt in receipts:
+        receipt_number = receipt.get("receipt_number", "—")
+        customer_id    = receipt.get("customer_id")
+
+        log.info(f"Loyverse receipt recibido: #{receipt_number} | customer_id: {customer_id or 'ninguno'}")
+
+        # Sin cliente asociado → saltar
+        if not customer_id:
+            log.info(f"Receipt #{receipt_number}: sin cliente, se omite.")
+            skipped += 1
+            continue
+
+        # Obtener datos del cliente desde Loyverse
+        try:
+            customer_data = loyverse_get(f"/customers/{customer_id}")
+            customer_email = customer_data.get("email") or ""
+            customer_name  = customer_data.get("name") or "Cliente"
+        except Exception as e:
+            log.error(f"Error obteniendo cliente {customer_id}: {e}")
+            skipped += 1
+            continue
+
+        # Sin email → saltar
+        if not customer_email.strip():
+            log.info(f"Receipt #{receipt_number}: cliente '{customer_name}' sin email, se omite.")
+            skipped += 1
+            continue
+
+        # Enviar comprobante
+        ok = send_receipt_email(receipt, customer_email.strip(), customer_name)
+        if ok:
+            processed += 1
+        else:
+            skipped += 1
+
+    return jsonify({
+        "status":    "ok",
+        "enviados":  processed,
+        "omitidos":  skipped,
+    }), 200
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
