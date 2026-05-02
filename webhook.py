@@ -37,6 +37,13 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
+@app.route("/debug/tailscale", methods=["GET"])
+def debug_tailscale():
+    import subprocess
+    result = subprocess.run(["tailscale", "status"], capture_output=True, text=True)
+    return jsonify({"output": result.stdout, "error": result.stderr})
+    
+    
 # ── Webhook PCO ───────────────────────────────────────────────────────────────
 
 @app.route("/webhook/pco", methods=["POST"])
