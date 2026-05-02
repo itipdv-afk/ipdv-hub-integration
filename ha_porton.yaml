@@ -1,0 +1,140 @@
+# ==============================================================================
+# HOME ASSISTANT — Configuración del portón
+# ==============================================================================
+# Agregar cada sección al archivo correspondiente de tu HA,
+# o pegar todo en configuration.yaml si usás configuración monolítica.
+# ==============================================================================
+
+
+# ── 1. input_text: almacén JSON de autorizados ────────────────────────────────
+# Archivo: configuration.yaml  (o input_text.yaml si usás split config)
+#
+# Este input_text actúa como base de datos liviana.
+# El webhook escribe aquí el JSON con los autorizados de PCO.
+# Para accesos temporales, podés editarlo desde el dashboard de HA.
+#
+# Formato del valor almacenado:
+# {
+#   "+56912345678": { "nombre": "Ana García", "pco_id": "123", "expira": null },
+#   "+56987654321": { "nombre": "Visita",     "pco_id": null,  "expira": "2026-05-10T18:00:00" }
+# }
+
+input_text:
+  porton_autorizados:
+    name: "Portón — lista de autorizados"
+    max: 10000        # suficiente para ~300 entradas JSON
+    initial: "{}"
+
+
+# ── 2. input_button: botón manual para abrir desde la app ────────────────────
+# Útil para abrir desde el celular de quien administra, sin necesitar llamar.
+
+input_button:
+  porton_abrir_manual:
+    name: "Abrir portón (manual)"
+    icon: mdi:gate-open
+
+
+# ── 3. script: pulso al relé ──────────────────────────────────────────────────
+# Ajustá switch.rele_porton al entity_id real de tu relé WiFi.
+# El pulso de 1 segundo simula la pulsación del botón del motor.
+
+script:
+  porton_pulso:
+    alias: "Portón — pulso al relé"
+    sequence:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.rele_porton   # <-- cambiá por tu entity_id real
+      - delay: "00:00:01"
+      - service: switch.turn_off
+        target:
+          entity_id: switch.rele_porton
+
+
+# ── 4. automation: llamada autorizada desde Tasker ────────────────────────────
+# Tasker llama a: POST /api/webhook/porton_llamada_entrante
+# con body: { "telefono": "+56912345678" }
+#
+# HA verifica si el número está en la lista y si no expiró,
+# luego activa el script de pulso y registra en el log.
+
+automation:
+  - alias: "Portón — autorizar llamada entrante"
+    trigger:
+      - platform: webhook
+        webhook_id: "porton_llamada_entrante"   # secreto — cambialo por uno tuyo
+        allowed_methods: [POST]
+        local_only: false    # true si Tasker está en la misma red, false si va por internet
+
+    action:
+      - variables:
+          telefono: "{{ trigger.json.telefono | default('') }}"
+          autorizados_raw: "{{ states('input_text.porton_autorizados') }}"
+          autorizados: "{{ autorizados_raw | from_json }}"
+          entrada: "{{ autorizados.get(telefono, {}) }}"
+          expira: "{{ entrada.get('expira') }}"
+          nombre: "{{ entrada.get('nombre', 'Desconocido') }}"
+          tiene_acceso: >
+            {{ telefono in autorizados and
+               (expira == None or
+                (expira | as_datetime) > now()) }}
+
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ tiene_acceso }}"
+            sequence:
+              - service: script.porton_pulso
+              - service: logbook.log
+                data:
+                  name: "Portón"
+                  message: "Abierto por {{ nombre }} ({{ telefono }})"
+                  entity_id: input_text.porton_autorizados
+
+        default:
+          - service: logbook.log
+            data:
+              name: "Portón"
+              message: "Acceso denegado: {{ telefono }}{% if telefono in autorizados %} (expirado){% endif %}"
+              entity_id: input_text.porton_autorizados
+
+
+  # ── 5. automation: botón manual ───────────────────────────────────────────
+  - alias: "Portón — abrir manual desde app"
+    trigger:
+      - platform: state
+        entity_id: input_button.porton_abrir_manual
+    action:
+      - service: script.porton_pulso
+      - service: logbook.log
+        data:
+          name: "Portón"
+          message: "Abierto manualmente desde la app"
+          entity_id: input_text.porton_autorizados
+
+
+  # ── 6. automation: limpiar accesos temporales expirados (diario) ───────────
+  - alias: "Portón — limpiar expirados"
+    trigger:
+      - platform: time
+        at: "03:00:00"
+    action:
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.porton_autorizados
+        data:
+          value: >
+            {% set autorizados = states('input_text.porton_autorizados') | from_json %}
+            {% set vigentes = namespace(d={}) %}
+            {% for tel, datos in autorizados.items() %}
+              {% if datos.expira == None or (datos.expira | as_datetime) > now() %}
+                {% set vigentes.d = dict(vigentes.d, **{tel: datos}) %}
+              {% endif %}
+            {% endfor %}
+            {{ vigentes.d | to_json }}
+      - service: logbook.log
+        data:
+          name: "Portón"
+          message: "Limpieza automática de accesos expirados completada"
+          entity_id: input_text.porton_autorizados

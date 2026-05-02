@@ -13,8 +13,8 @@ from sync_core import (
     log, WEBHOOK_SECRET, WEBHOOK_SECRET_UPDATED,
     cargar_field_definitions, obtener_persona_pco,
     cumple_condiciones, sincronizar_persona,
-    verificar_firma_pco,
-    loyverse_get,
+    verificar_firma_pco, loyverse_get,
+    sincronizar_porton_ha,
 )
 from receipt_mailer import send_receipt_email
 
@@ -37,7 +37,7 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
-# ── Webhook PCO (sincronización de clientes) ──────────────────────────────────
+# ── Webhook PCO ───────────────────────────────────────────────────────────────
 
 @app.route("/webhook/pco", methods=["POST"])
 def webhook_pco():
@@ -78,25 +78,37 @@ def webhook_pco():
         return jsonify({"status": "persona no encontrada"}), 200
 
     nombre = f"{persona['first_name']} {persona['last_name']}".strip()
-    log.info(f"Persona: {nombre} | edad={persona['edad']} | "
-             f"RUT={persona.get('rut') or 'N/A'} | email={persona.get('email') or 'N/A'}")
+    log.info(
+        f"Persona: {nombre} | edad={persona['edad']} | "
+        f"RUT={persona.get('rut') or 'N/A'} | "
+        f"email={persona.get('email') or 'N/A'} | "
+        f"portón={persona.get('acceso_porton') or 'N/A'}"
+    )
 
+    # ── Sincronización Loyverse ───────────────────────────────────────────────
     cumple, motivo = cumple_condiciones(persona)
-    if not cumple:
-        log.info(f"Persona excluida ({motivo}): {nombre}")
-        return jsonify({"status": "excluido", "motivo": motivo}), 200
+    if cumple:
+        resultado_loyverse = sincronizar_persona(persona)
+        log.info(f"Loyverse [{resultado_loyverse}]: {nombre}")
+    else:
+        resultado_loyverse = f"excluido ({motivo})"
+        log.info(f"Loyverse excluido ({motivo}): {nombre}")
 
-    resultado = sincronizar_persona(persona)
-    log.info(f"Resultado para {nombre}: {resultado}")
+    # ── Sincronización portón → Home Assistant ────────────────────────────────
+    resultado_porton = sincronizar_porton_ha(persona)
+    log.info(f"Portón HA [{resultado_porton}]: {nombre}")
 
     return jsonify({
-        "status":   resultado,
-        "persona":  nombre,
-        "pco_id":   person_id,
+        "status":          "ok",
+        "persona":         nombre,
+        "pco_id":          person_id,
+        "loyverse":        resultado_loyverse,
+        "porton_ha":       resultado_porton,
+        "acceso_porton":   persona.get("acceso_porton"),
     }), 200
 
 
-# ── Webhook Loyverse (envío automático de comprobantes) ───────────────────────
+# ── Webhook Loyverse (comprobantes) ───────────────────────────────────────────
 
 @app.route("/webhook/loyverse", methods=["POST"])
 def webhook_loyverse():
@@ -113,11 +125,8 @@ def webhook_loyverse():
         log.warning(f"Webhook Loyverse: error parseando JSON: {e}")
         return jsonify({"error": "JSON inválido"}), 400
 
-    # Loyverse envía el receipt directamente en el payload
-    # La estructura es: { "receipts": [...] }  o directamente el objeto receipt
     receipts = payload.get("receipts") if isinstance(payload, dict) else None
     if receipts is None:
-        # A veces Loyverse manda el receipt directamente como objeto raíz
         receipts = [payload]
 
     processed = 0
@@ -129,15 +138,13 @@ def webhook_loyverse():
 
         log.info(f"Loyverse receipt recibido: #{receipt_number} | customer_id: {customer_id or 'ninguno'}")
 
-        # Sin cliente asociado → saltar
         if not customer_id:
             log.info(f"Receipt #{receipt_number}: sin cliente, se omite.")
             skipped += 1
             continue
 
-        # Obtener datos del cliente desde Loyverse
         try:
-            customer_data = loyverse_get(f"/customers/{customer_id}")
+            customer_data  = loyverse_get(f"/customers/{customer_id}")
             customer_email = customer_data.get("email") or ""
             customer_name  = customer_data.get("name") or "Cliente"
         except Exception as e:
@@ -145,13 +152,11 @@ def webhook_loyverse():
             skipped += 1
             continue
 
-        # Sin email → saltar
         if not customer_email.strip():
             log.info(f"Receipt #{receipt_number}: cliente '{customer_name}' sin email, se omite.")
             skipped += 1
             continue
 
-        # Enviar comprobante
         ok = send_receipt_email(receipt, customer_email.strip(), customer_name)
         if ok:
             processed += 1
@@ -159,9 +164,9 @@ def webhook_loyverse():
             skipped += 1
 
     return jsonify({
-        "status":    "ok",
-        "enviados":  processed,
-        "omitidos":  skipped,
+        "status":   "ok",
+        "enviados": processed,
+        "omitidos": skipped,
     }), 200
 
 

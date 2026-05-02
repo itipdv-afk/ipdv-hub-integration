@@ -46,9 +46,18 @@ DELAY_ENTRE_LLAMADAS = float(os.getenv("DELAY_ENTRE_LLAMADAS", "0.5"))
 PCO_PAGE_SIZE        = int(os.getenv("PCO_PAGE_SIZE", "100"))
 
 # Secret para verificar firma de webhooks de PCO
-# Se obtiene al registrar el webhook en PCO y debe guardarse en Railway
 WEBHOOK_SECRET          = os.getenv("WEBHOOK_SECRET", "")
 WEBHOOK_SECRET_UPDATED  = os.getenv("WEBHOOK_SECRET_UPDATED", "")
+
+# ── Home Assistant ────────────────────────────────────────────────────────────
+# URL base interna de HA (sin barra final). Ej: http://192.168.1.100:8123
+HA_URL              = os.getenv("HA_URL", "").rstrip("/")
+# Long-lived access token generado en HA → Perfil → Tokens de larga duración
+HA_TOKEN            = os.getenv("HA_TOKEN", "")
+# Nombre del campo personalizado en PCO que controla el acceso al portón
+PCO_CAMPO_PORTON    = os.getenv("PCO_CAMPO_PORTON", "Acceso al portón")
+# Valor del campo que significa "autorizado"
+PCO_VALOR_PORTON    = os.getenv("PCO_VALOR_PORTON", "Llamado")
 
 # Valores que se tratan como "sin dato"
 VALORES_VACIOS = {"N/A", "NA", "NONE", "-", "S/I", ""}
@@ -59,7 +68,7 @@ PCO_BASE      = "https://api.planningcenteronline.com/people/v2"
 LOYVERSE_BASE = "https://api.loyverse.com/v1.0"
 
 
-# ─── HELPERS ──────────────────────────────────────────────────────────────────
+# ─── HELPERS GENÉRICOS ────────────────────────────────────────────────────────
 
 def normalizar(valor) -> str | None:
     if not valor:
@@ -104,6 +113,8 @@ def verificar_firma_pco(payload_bytes: bytes, signature_header: str) -> bool:
     return False
 
 
+# ─── HTTP HELPERS ─────────────────────────────────────────────────────────────
+
 def pco_get(path: str, params: dict = None) -> dict:
     url = PCO_BASE + path
     resp = requests.get(url, auth=(PCO_APP_ID, PCO_SECRET), params=params, timeout=30)
@@ -126,6 +137,50 @@ def loyverse_post(path: str, body: dict) -> dict:
     resp.raise_for_status()
     return resp.json()
 
+
+# ─── HOME ASSISTANT HTTP HELPERS ──────────────────────────────────────────────
+
+def _ha_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {HA_TOKEN}",
+        "Content-Type":  "application/json",
+    }
+
+
+def ha_get(path: str) -> dict | None:
+    """GET a la API REST de Home Assistant. Retorna None si falla."""
+    if not HA_URL or not HA_TOKEN:
+        log.warning("HA_URL o HA_TOKEN no configurados — salteando llamada a HA.")
+        return None
+    try:
+        resp = requests.get(f"{HA_URL}/api{path}", headers=_ha_headers(), timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        log.error(f"Error GET HA {path}: {e}")
+        return None
+
+
+def ha_post(path: str, body: dict) -> dict | None:
+    """POST a la API REST de Home Assistant. Retorna None si falla."""
+    if not HA_URL or not HA_TOKEN:
+        log.warning("HA_URL o HA_TOKEN no configurados — salteando llamada a HA.")
+        return None
+    try:
+        resp = requests.post(
+            f"{HA_URL}/api{path}",
+            headers=_ha_headers(),
+            json=body,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        log.error(f"Error POST HA {path}: {e}")
+        return None
+
+
+# ─── FECHA ────────────────────────────────────────────────────────────────────
 
 def calcular_edad(birthdate_str: str):
     if not birthdate_str:
@@ -162,7 +217,6 @@ def cargar_ruts_bulk(field_definitions: dict) -> dict:
     """
     Carga TODOS los valores del campo RUT en una sola pasada paginada.
     Retorna dict {person_id -> rut_value}.
-    Esto evita hacer una llamada individual por persona (que causa rate limit 429).
     """
     rut_field_id = next(
         (fid for fid, fname in field_definitions.items()
@@ -202,18 +256,52 @@ def cargar_ruts_bulk(field_definitions: dict) -> dict:
     return ruts
 
 
-def obtener_campo_rut_individual(person_id: str, field_definitions: dict):
+def cargar_campos_personalizados_bulk(field_definitions: dict) -> dict:
     """
-    Obtiene el RUT de una sola persona. Usado únicamente por el webhook
-    (que procesa una persona a la vez, no el bulk del cron).
+    Carga TODOS los campos personalizados en una sola pasada paginada.
+    Retorna dict {person_id -> {nombre_campo -> valor}}.
+    Usado por el cron para no hacer llamadas individuales.
     """
-    rut_field_id = next(
-        (fid for fid, fname in field_definitions.items()
-         if fname.strip().upper() == PCO_RUT_FIELD_NAME.upper()),
-        None
-    )
-    if not rut_field_id:
-        return None
+    campos = {}
+    offset = 0
+    while True:
+        data = pco_get("/field_data", params={
+            "per_page": 100,
+            "offset":   offset,
+            "filter":   "no_dates",
+        })
+        items = data.get("data", [])
+        if not items:
+            break
+        for item in items:
+            person_id = (item.get("relationships", {})
+                         .get("customizable", {})
+                         .get("data", {})
+                         .get("id"))
+            fdef_id   = (item.get("relationships", {})
+                         .get("field_definition", {})
+                         .get("data", {})
+                         .get("id"))
+            value     = item.get("attributes", {}).get("value")
+            if person_id and fdef_id and value:
+                nombre_campo = field_definitions.get(fdef_id, fdef_id)
+                campos.setdefault(person_id, {})[nombre_campo] = value
+        total = data.get("meta", {}).get("total_count", 0)
+        offset += len(items)
+        if offset >= total:
+            break
+
+    log.info(f"Campos personalizados cargados en bulk: {len(campos)} personas con campos.")
+    return campos
+
+
+def obtener_campos_individuales(person_id: str, field_definitions: dict) -> dict:
+    """
+    Obtiene todos los campos personalizados de UNA persona.
+    Usado por el webhook (procesa una persona a la vez).
+    Retorna {nombre_campo -> valor}.
+    """
+    campos = {}
     try:
         data = pco_get(f"/people/{person_id}/field_data")
         for item in data.get("data", []):
@@ -221,11 +309,22 @@ def obtener_campo_rut_individual(person_id: str, field_definitions: dict):
                        .get("field_definition", {})
                        .get("data", {})
                        .get("id"))
-            if fdef_id == rut_field_id:
-                return item.get("attributes", {}).get("value")
+            value = item.get("attributes", {}).get("value")
+            if fdef_id and value:
+                nombre_campo = field_definitions.get(fdef_id, fdef_id)
+                campos[nombre_campo] = value
     except Exception as e:
-        log.warning(f"No se pudo obtener RUT de persona {person_id}: {e}")
-    return None
+        log.warning(f"No se pudieron obtener campos de persona {person_id}: {e}")
+    return campos
+
+
+def obtener_campo_rut_individual(person_id: str, field_definitions: dict):
+    """
+    Obtiene solo el RUT de una persona. Compatibilidad con código existente.
+    Preferir obtener_campos_individuales() que ya trae todos los campos.
+    """
+    campos = obtener_campos_individuales(person_id, field_definitions)
+    return campos.get(PCO_RUT_FIELD_NAME)
 
 
 def obtener_persona_pco(person_id: str, field_definitions: dict) -> dict | None:
@@ -243,9 +342,17 @@ def obtener_persona_pco(person_id: str, field_definitions: dict) -> dict | None:
         emails_idx = {i["id"]: i for i in included if i["type"] == "Email"}
         phones_idx = {i["id"]: i for i in included if i["type"] == "PhoneNumber"}
 
-        # Para el webhook usamos lookup individual (solo una persona)
-        rut_valor = normalizar(obtener_campo_rut_individual(person_id, field_definitions))
-        return _parsear_persona(person, emails_idx, phones_idx, ruts_bulk={person_id: rut_valor} if rut_valor else {})
+        # Una sola llamada trae RUT, portón y cualquier otro campo personalizado
+        campos = obtener_campos_individuales(person_id, field_definitions)
+        rut_valor = normalizar(campos.get(PCO_RUT_FIELD_NAME))
+
+        return _parsear_persona(
+            person,
+            emails_idx,
+            phones_idx,
+            ruts_bulk={person_id: rut_valor} if rut_valor else {},
+            campos_bulk={person_id: campos},
+        )
     except Exception as e:
         log.error(f"Error obteniendo persona {person_id} de PCO: {e}")
         return None
@@ -254,15 +361,13 @@ def obtener_persona_pco(person_id: str, field_definitions: dict) -> dict | None:
 def obtener_personas_pco() -> list:
     """
     Descarga todas las personas ACTIVAS desde PCO. Usado por el cron.
-    Carga los RUTs en una sola llamada bulk para evitar rate limit.
     """
     field_definitions = cargar_field_definitions()
-
-    # Cargar TODOS los RUTs de una vez — evita 150+ llamadas individuales
-    ruts_bulk = cargar_ruts_bulk(field_definitions)
+    ruts_bulk   = cargar_ruts_bulk(field_definitions)
+    campos_bulk = cargar_campos_personalizados_bulk(field_definitions)
 
     personas = []
-    offset = 0
+    offset   = 0
 
     while True:
         params = {
@@ -283,7 +388,11 @@ def obtener_personas_pco() -> list:
         phones_idx = {i["id"]: i for i in included if i["type"] == "PhoneNumber"}
 
         for person in items:
-            p = _parsear_persona(person, emails_idx, phones_idx, ruts_bulk=ruts_bulk)
+            p = _parsear_persona(
+                person, emails_idx, phones_idx,
+                ruts_bulk=ruts_bulk,
+                campos_bulk=campos_bulk,
+            )
             if p:
                 personas.append(p)
 
@@ -298,7 +407,7 @@ def obtener_personas_pco() -> list:
 
 
 def _parsear_persona(person: dict, emails_idx: dict, phones_idx: dict,
-                     ruts_bulk: dict = None) -> dict | None:
+                     ruts_bulk: dict = None, campos_bulk: dict = None) -> dict | None:
     """Extrae y normaliza los datos de una persona desde la respuesta de PCO."""
     attrs = person.get("attributes", {})
     pid   = person["id"]
@@ -328,29 +437,35 @@ def _parsear_persona(person: dict, emails_idx: dict, phones_idx: dict,
                 break
     telefono = normalizar(telefono_raw)
 
-    # RUT viene del dict bulk (cron) o del dict individual (webhook)
     rut = normalizar((ruts_bulk or {}).get(pid))
 
+    # Campos personalizados de esta persona (dict nombre->valor)
+    campos = (campos_bulk or {}).get(pid, {})
+
+    # Campo portón: normalizado a minúsculas para comparación robusta
+    acceso_porton = normalizar(campos.get(PCO_CAMPO_PORTON))
+
     return {
-        "pco_id":     pid,
-        "first_name": attrs.get("first_name", "").strip(),
-        "last_name":  attrs.get("last_name", "").strip(),
-        "status":     attrs.get("status", ""),
-        "birthdate":  birthdate,
-        "edad":       edad,
-        "email":      email,
-        "phone":      telefono,
-        "rut":        rut,
+        "pco_id":         pid,
+        "first_name":     attrs.get("first_name", "").strip(),
+        "last_name":      attrs.get("last_name", "").strip(),
+        "status":         attrs.get("status", ""),
+        "birthdate":      birthdate,
+        "edad":           edad,
+        "email":          email,
+        "phone":          telefono,
+        "rut":            rut,
+        "acceso_porton":  acceso_porton,   # ej. "Llamado", None, "No"
+        "campos_pco":     campos,           # todos los campos personalizados
     }
 
 
-# ─── VALIDACIÓN ───────────────────────────────────────────────────────────────
+# ─── VALIDACIÓN (Loyverse) ────────────────────────────────────────────────────
 
 def cumple_condiciones(persona: dict, emails_en_pco: set = None) -> tuple[bool, str]:
     """
-    Verifica si una persona cumple todas las condiciones para ser sincronizada.
+    Verifica si una persona cumple condiciones para ser sincronizada en Loyverse.
     Retorna (True, "") si cumple, o (False, "motivo") si no.
-    emails_en_pco: set de emails ya vistos (para detectar duplicados en cron).
     """
     if persona.get("status") and persona["status"] != "active":
         return False, "inactiva"
@@ -365,6 +480,15 @@ def cumple_condiciones(persona: dict, emails_en_pco: set = None) -> tuple[bool, 
     if emails_en_pco and persona["email"].lower() in emails_en_pco:
         return False, "email duplicado en PCO"
     return True, ""
+
+
+def califica_porton(persona: dict) -> bool:
+    """
+    Retorna True si la persona debe tener acceso al portón.
+    Compara sin distinción de mayúsculas/minúsculas ni espacios extra.
+    """
+    acceso = (persona.get("acceso_porton") or "").strip().lower()
+    return acceso == PCO_VALOR_PORTON.strip().lower()
 
 
 # ─── LOYVERSE ─────────────────────────────────────────────────────────────────
@@ -402,7 +526,6 @@ def construir_payload(persona: dict) -> dict:
 def sincronizar_persona(persona: dict) -> str:
     """
     Crea o actualiza un cliente en Loyverse.
-    Función central usada por cron y webhook.
     Retorna: 'creado', 'actualizado', 'simulado' o 'error'.
     """
     existing = buscar_cliente_por_email(persona.get("email"))
@@ -431,3 +554,70 @@ def sincronizar_persona(persona: dict) -> str:
     except Exception as e:
         log.error(f"ERROR GENERAL: {e}")
         return "error"
+
+
+# ─── HOME ASSISTANT — PORTÓN ──────────────────────────────────────────────────
+
+def sincronizar_porton_ha(persona: dict) -> str:
+    """
+    Sincroniza el acceso al portón de UNA persona con Home Assistant.
+
+    HA almacena la lista en un input_text llamado 'porton_autorizados'
+    como JSON: { "<telefono_normalizado>": { "nombre": ..., "pco_id": ...,
+                                             "expira": null } }
+
+    Reglas:
+    - califica_porton() True  → agregar o actualizar entrada (expira=null)
+    - califica_porton() False → eliminar entrada si existe
+
+    Retorna: 'agregado' | 'actualizado' | 'eliminado' | 'omitido' |
+             'error_ha' | 'sin_telefono'
+    """
+    if not HA_URL or not HA_TOKEN:
+        log.info("HA no configurado — salteando sync portón.")
+        return "omitido"
+
+    telefono = formatear_telefono(persona.get("phone") or "")
+    if not telefono:
+        log.info(f"Persona {persona.get('pco_id')} sin teléfono — no puede acceder al portón.")
+        return "sin_telefono"
+
+    nombre = f"{persona['first_name']} {persona['last_name']}".strip()
+    califica = califica_porton(persona)
+
+    # Leer estado actual desde HA
+    estado = ha_get("/states/input_text.porton_autorizados")
+    if estado is None:
+        return "error_ha"
+
+    try:
+        import json
+        autorizados: dict = json.loads(estado.get("state", "{}") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        autorizados = {}
+
+    if califica:
+        es_nuevo = telefono not in autorizados
+        autorizados[telefono] = {
+            "nombre":  nombre,
+            "pco_id":  persona["pco_id"],
+            "expira":  None,    # acceso permanente vía PCO
+        }
+        resultado = "agregado" if es_nuevo else "actualizado"
+    else:
+        if telefono in autorizados:
+            del autorizados[telefono]
+            resultado = "eliminado"
+        else:
+            return "omitido"
+
+    # Escribir de vuelta a HA
+    import json
+    ok = ha_post("/states/input_text.porton_autorizados", {
+        "state": json.dumps(autorizados, ensure_ascii=False),
+    })
+    if ok is None:
+        return "error_ha"
+
+    log.info(f"Portón HA [{resultado}]: {nombre} ({telefono})")
+    return resultado
