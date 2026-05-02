@@ -58,9 +58,9 @@ def register_webhook():
 
     # Registrar nuevo webhook
     payload = {
-        "topic":        "receipts",
-        "callback_url": WEBHOOK_ENDPOINT,
-        "format":       "JSON",
+        "topic":  "receipts",
+        "url":    WEBHOOK_ENDPOINT,
+        "format": "JSON",
     }
     resp = requests.post(
         f"{LOYVERSE_BASE}/webhooks",

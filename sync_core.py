@@ -562,13 +562,11 @@ def sincronizar_porton_ha(persona: dict) -> str:
     """
     Sincroniza el acceso al portón de UNA persona con Home Assistant.
 
-    HA almacena la lista en un input_text llamado 'porton_autorizados'
-    como JSON: { "<telefono_normalizado>": { "nombre": ..., "pco_id": ...,
-                                             "expira": null } }
+    HA almacena la lista en /config/porton_autorizados.json como:
+    { "<telefono>": { "nombre": ..., "pco_id": ..., "expira": null } }
 
-    Reglas:
-    - califica_porton() True  → agregar o actualizar entrada (expira=null)
-    - califica_porton() False → eliminar entrada si existe
+    Railway lee el archivo actual via sensor.porton_autorizados,
+    lo modifica y lo escribe de vuelta via shell_command.actualizar_porton.
 
     Retorna: 'agregado' | 'actualizado' | 'eliminado' | 'omitido' |
              'error_ha' | 'sin_telefono'
@@ -582,26 +580,33 @@ def sincronizar_porton_ha(persona: dict) -> str:
         log.info(f"Persona {persona.get('pco_id')} sin teléfono — no puede acceder al portón.")
         return "sin_telefono"
 
-    nombre = f"{persona['first_name']} {persona['last_name']}".strip()
+    nombre   = f"{persona['first_name']} {persona['last_name']}".strip()
     califica = califica_porton(persona)
 
-    # Leer estado actual desde HA
-    estado = ha_get("/states/input_text.porton_autorizados")
+    # ── Leer lista actual desde el sensor de HA ───────────────────────────────
+    estado = ha_get("/states/sensor.porton_autorizados")
     if estado is None:
         return "error_ha"
 
     try:
         import json
-        autorizados: dict = json.loads(estado.get("state", "{}") or "{}")
-    except (json.JSONDecodeError, TypeError):
+        # El sensor expone el JSON como atributos
+        autorizados: dict = estado.get("attributes", {})
+        # Filtrar atributos propios del sensor que no son teléfonos
+        autorizados = {
+            k: v for k, v in autorizados.items()
+            if k.startswith("+") and isinstance(v, dict)
+        }
+    except Exception as e:
+        log.error(f"Error leyendo autorizados desde HA: {e}")
         autorizados = {}
 
     if califica:
         es_nuevo = telefono not in autorizados
         autorizados[telefono] = {
-            "nombre":  nombre,
-            "pco_id":  persona["pco_id"],
-            "expira":  None,    # acceso permanente vía PCO
+            "nombre": nombre,
+            "pco_id": persona["pco_id"],
+            "expira": None,
         }
         resultado = "agregado" if es_nuevo else "actualizado"
     else:
@@ -611,10 +616,10 @@ def sincronizar_porton_ha(persona: dict) -> str:
         else:
             return "omitido"
 
-    # Escribir de vuelta a HA
+    # ── Escribir lista actualizada via shell_command ──────────────────────────
     import json
-    ok = ha_post("/states/input_text.porton_autorizados", {
-        "state": json.dumps(autorizados, ensure_ascii=False),
+    ok = ha_post("/services/shell_command/actualizar_porton", {
+        "autorizados": json.dumps(autorizados, ensure_ascii=False),
     })
     if ok is None:
         return "error_ha"
