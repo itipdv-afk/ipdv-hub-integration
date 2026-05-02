@@ -169,6 +169,38 @@ def webhook_loyverse():
         "omitidos": skipped,
     }), 200
 
+# ── Endpoint portón (llamada desde Tasker) ────────────────────────────────────
+
+@app.route("/porton/llamada", methods=["POST"])
+def porton_llamada():
+    """
+    Recibe el número de teléfono desde Tasker y valida contra HA.
+    Si está autorizado, ordena a HA activar el relé.
+    """
+    payload = request.get_json(force=True, silent=True)
+    if not payload:
+        log.warning("Portón: payload vacío.")
+        return jsonify({"error": "JSON inválido"}), 400
+
+    telefono = payload.get("telefono", "").strip()
+    if not telefono:
+        log.warning("Portón: número de teléfono vacío.")
+        return jsonify({"error": "Número requerido"}), 400
+
+    log.info(f"Portón: llamada entrante de {telefono}")
+
+    # Llamar al webhook de HA para que valide y active el relé
+    resultado = ha_post(f"/api/webhook/abrir_portonIPDV", {
+        "telefono": telefono,
+    })
+
+    if resultado is None:
+        log.error(f"Portón: error contactando HA para {telefono}")
+        return jsonify({"status": "error_ha"}), 500
+
+    log.info(f"Portón: solicitud enviada a HA para {telefono}")
+    return jsonify({"status": "ok", "telefono": telefono}), 200
+    
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
