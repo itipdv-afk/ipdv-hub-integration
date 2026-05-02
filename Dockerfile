@@ -9,6 +9,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgdk-pixbuf-2.0-0 \
     libffi-dev \
     shared-mime-info \
+    curl \
+    iptables \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar Tailscale
+RUN curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg \
+        -o /usr/share/keyrings/tailscale-archive-keyring.gpg \
+    && curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.tailscale-keyring.list \
+        -o /etc/apt/sources.list.d/tailscale.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends tailscale \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -21,10 +32,12 @@ COPY cron.py .
 COPY webhook.py .
 COPY receipt_mailer.py .
 COPY register_webhook.py .
+COPY start.sh .
+RUN chmod +x start.sh
 
 RUN mkdir -p /app/logs
 
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
 
-CMD gunicorn --bind 0.0.0.0:${PORT} --workers 1 --timeout 120 webhook:app
+CMD ["./start.sh"]
