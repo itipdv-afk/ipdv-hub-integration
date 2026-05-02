@@ -147,27 +147,36 @@ def _ha_headers() -> dict:
     }
 
 
+def _ha_session():
+    """Session requests configurada con proxy SOCKS5 de Tailscale."""
+    import requests
+    session = requests.Session()
+    session.proxies = {
+        "http":  "socks5h://localhost:1055",
+        "https": "socks5h://localhost:1055",
+    }
+    return session
+
 def ha_get(path: str) -> dict | None:
-    """GET a la API REST de Home Assistant. Retorna None si falla."""
     if not HA_URL or not HA_TOKEN:
         log.warning("HA_URL o HA_TOKEN no configurados — salteando llamada a HA.")
         return None
     try:
-        resp = requests.get(f"{HA_URL}/api{path}", headers=_ha_headers(), timeout=10)
+        session = _ha_session()
+        resp = session.get(f"{HA_URL}/api{path}", headers=_ha_headers(), timeout=10)
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
         log.error(f"Error GET HA {path}: {e}")
         return None
 
-
 def ha_post(path: str, body: dict) -> dict | None:
-    """POST a la API REST de Home Assistant. Retorna None si falla."""
     if not HA_URL or not HA_TOKEN:
         log.warning("HA_URL o HA_TOKEN no configurados — salteando llamada a HA.")
         return None
     try:
-        resp = requests.post(
+        session = _ha_session()
+        resp = session.post(
             f"{HA_URL}/api{path}",
             headers=_ha_headers(),
             json=body,
