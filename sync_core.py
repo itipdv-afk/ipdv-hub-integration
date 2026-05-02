@@ -299,7 +299,7 @@ def obtener_campos_individuales(person_id: str, field_definitions: dict) -> dict
     """
     Obtiene todos los campos personalizados de UNA persona.
     Usado por el webhook (procesa una persona a la vez).
-    Retorna {nombre_campo -> valor}.
+    Retorna {nombre_campo -> valor o lista de valores si es checkbox múltiple}.
     """
     campos = {}
     try:
@@ -312,11 +312,19 @@ def obtener_campos_individuales(person_id: str, field_definitions: dict) -> dict
             value = item.get("attributes", {}).get("value")
             if fdef_id and value:
                 nombre_campo = field_definitions.get(fdef_id, fdef_id)
-                campos[nombre_campo] = value
+                if nombre_campo in campos:
+                    # Campo ya existe → convertir a lista y acumular
+                    existing = campos[nombre_campo]
+                    if isinstance(existing, list):
+                        existing.append(value)
+                    else:
+                        campos[nombre_campo] = [existing, value]
+                else:
+                    campos[nombre_campo] = value
     except Exception as e:
         log.warning(f"No se pudieron obtener campos de persona {person_id}: {e}")
     return campos
-
+  
 
 def obtener_campo_rut_individual(person_id: str, field_definitions: dict):
     """
@@ -485,11 +493,16 @@ def cumple_condiciones(persona: dict, emails_en_pco: set = None) -> tuple[bool, 
 def califica_porton(persona: dict) -> bool:
     """
     Retorna True si la persona debe tener acceso al portón.
-    Compara sin distinción de mayúsculas/minúsculas ni espacios extra.
+    Soporta campo de valor único (string) y selección múltiple (lista).
     """
-    acceso = (persona.get("acceso_porton") or "").strip().lower()
-    return acceso == PCO_VALOR_PORTON.strip().lower()
+    acceso = persona.get("acceso_porton")
+    valor_buscar = PCO_VALOR_PORTON.strip().lower()
 
+    if isinstance(acceso, list):
+        return any(v.strip().lower() == valor_buscar for v in acceso)
+    elif isinstance(acceso, str):
+        return acceso.strip().lower() == valor_buscar
+    return False
 
 # ─── LOYVERSE ─────────────────────────────────────────────────────────────────
 
