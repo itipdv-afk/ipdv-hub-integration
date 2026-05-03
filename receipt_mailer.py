@@ -318,7 +318,10 @@ def send_receipt_email(receipt: dict, customer_email: str,
         log.warning(f"Enviando sin PDF para receipt #{receipt_number}")
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
             server.login(GMAIL_USER, GMAIL_APP_PASS)
             server.sendmail(GMAIL_USER, customer_email, msg.as_string())
         log.info(f"✉️  Comprobante enviado a {customer_email} (receipt #{receipt_number})")
