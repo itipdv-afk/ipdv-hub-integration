@@ -583,15 +583,11 @@ def sincronizar_persona(persona: dict) -> str:
 def sincronizar_porton_ha(persona: dict) -> str:
     """
     Sincroniza el acceso al portón de UNA persona con Home Assistant.
+    
+    Usa shell_command de HA para modificar /config/porton_autorizados.json
+    directamente con jq — sin necesidad de leer el estado actual.
 
-    HA almacena la lista en /config/porton_autorizados.json como:
-    { "<telefono>": { "nombre": ..., "pco_id": ..., "expira": null } }
-
-    Railway lee el archivo actual via sensor.porton_autorizados,
-    lo modifica y lo escribe de vuelta via shell_command.actualizar_porton.
-
-    Retorna: 'agregado' | 'actualizado' | 'eliminado' | 'omitido' |
-             'error_ha' | 'sin_telefono'
+    Retorna: 'agregado' | 'eliminado' | 'omitido' | 'error_ha' | 'sin_telefono'
     """
     if not HA_URL or not HA_TOKEN:
         log.info("HA no configurado — salteando sync portón.")
@@ -605,38 +601,25 @@ def sincronizar_porton_ha(persona: dict) -> str:
     nombre   = f"{persona['first_name']} {persona['last_name']}".strip()
     califica = califica_porton(persona)
 
-    # ── Leer lista actual desde el sensor de HA ───────────────────────────────
-    estado = ha_get("/states/sensor.porton_autorizados")
-    if estado is None:
-        return "error_ha"
-
-    try:
-        import json
-        # El sensor expone el JSON como atributos
-        autorizados: dict = estado.get("attributes", {})
-        # Filtrar atributos propios del sensor que no son teléfonos
-        autorizados = {
-            k: v for k, v in autorizados.items()
-            if k.startswith("+") and isinstance(v, dict)
-        }
-    except Exception as e:
-        log.error(f"Error leyendo autorizados desde HA: {e}")
-        autorizados = {}
-
     if califica:
-        es_nuevo = telefono not in autorizados
-        autorizados[telefono] = {
-            "nombre": nombre,
-            "pco_id": persona["pco_id"],
-            "expira": None,
-        }
-        resultado = "agregado" if es_nuevo else "actualizado"
+        ok = ha_post("/services/shell_command/agregar_autorizado", {
+            "telefono": telefono,
+            "nombre":   nombre,
+            "pco_id":   str(persona["pco_id"]),
+        })
+        if ok is None:
+            return "error_ha"
+        log.info(f"Portón HA [agregado]: {nombre} ({telefono})")
+        return "agregado"
     else:
-        if telefono in autorizados:
-            del autorizados[telefono]
-            resultado = "eliminado"
-        else:
-            return "omitido"
+        ok = ha_post("/services/shell_command/eliminar_autorizado", {
+            "telefono": telefono,
+        })
+        if ok is None:
+            return "error_ha"
+        log.info(f"Portón HA [eliminado]: {nombre} ({telefono})")
+        return "eliminado"
+
 
     # ── Escribir lista actualizada via shell_command ──────────────────────────
     import json
