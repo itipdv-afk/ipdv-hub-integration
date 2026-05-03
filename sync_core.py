@@ -294,7 +294,17 @@ def cargar_campos_personalizados_bulk(field_definitions: dict) -> dict:
             value     = item.get("attributes", {}).get("value")
             if person_id and fdef_id and value:
                 nombre_campo = field_definitions.get(fdef_id, fdef_id)
-                campos.setdefault(person_id, {})[nombre_campo] = value
+                #campos.setdefault(person_id, {})[nombre_campo] = value
+                person_campos = campos.setdefault(person_id, {})
+                if nombre_campo in person_campos:
+                    existing = person_campos[nombre_campo]
+                    if isinstance(existing, list):
+                        existing.append(value)
+                    else:
+                        person_campos[nombre_campo] = [existing, value]
+                else:
+                    person_campos[nombre_campo] = value
+    
         total = data.get("meta", {}).get("total_count", 0)
         offset += len(items)
         if offset >= total:
