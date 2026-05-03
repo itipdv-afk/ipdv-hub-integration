@@ -7,13 +7,13 @@
 ==============================================================================
 """
 
+import json
 import time
-import logging
 from collections import Counter
 from sync_core import (
     log, DRY_RUN, PCO_RUT_FILTER, EDAD_MINIMA, DELAY_ENTRE_LLAMADAS,
     obtener_personas_pco, cumple_condiciones, sincronizar_persona,
-    sincronizar_porton_ha, califica_porton, formatear_telefono, ha_post,
+    califica_porton, formatear_telefono, ha_post,
 )
 
 
@@ -23,7 +23,7 @@ def main():
     log.info("=" * 60)
 
     if DRY_RUN:
-        log.warning("⚠️  MODO DRY RUN: No se escribirá nada en Loyverse.")
+        log.warning("⚠️  MODO DRY RUN: No se escribirá nada en Loyverse ni en HA.")
 
     # ── 1. Obtener personas activas desde PCO ─────────────────────────────────
     todas = obtener_personas_pco()
@@ -96,46 +96,57 @@ def main():
         log.info(f"  {len(a_sincronizar)} personas sincronizadas con Loyverse.")
 
     # ── 5. Sincronizar portón → Home Assistant ────────────────────────────────
-        log.info("")
-        log.info("─" * 60)
-        log.info("  SINCRONIZACIÓN → HOME ASSISTANT (PORTÓN)")
-        log.info("─" * 60)
+    log.info("")
+    log.info("─" * 60)
+    log.info("  SINCRONIZACIÓN → HOME ASSISTANT (PORTÓN)")
+    log.info("─" * 60)
 
-        # Construir lista completa de autorizados desde PCO
-        import json
-        autorizados = {}
-        sin_telefono = 0
+    # Construir lista completa de autorizados desde PCO
+    autorizados = {}
+    sin_telefono = 0
 
-        for persona in todas:
-            if not califica_porton(persona):
-                continue
-            telefono = formatear_telefono(persona.get("phone") or "")
-            if not telefono:
-                sin_telefono += 1
-                continue
-            nombre = f"{persona['first_name']} {persona['last_name']}".strip()
-            autorizados[telefono] = {
-                "nombre": nombre,
-                "pco_id": persona["pco_id"],
-                "expira": None,
-            }
+    for persona in todas:
+        if not califica_porton(persona):
+            continue
+        telefono = formatear_telefono(persona.get("phone") or "")
+        if not telefono:
+            sin_telefono += 1
+            continue
+        nombre = f"{persona['first_name']} {persona['last_name']}".strip()
+        autorizados[telefono] = {
+            "nombre": nombre,
+            "pco_id": persona["pco_id"],
+            "expira": None,
+        }
 
-        log.info(f"  Autorizados encontrados: {len(autorizados)}")
-        log.info(f"  Sin teléfono (omitidos): {sin_telefono}")
+    log.info(f"  Autorizados encontrados: {len(autorizados)}")
+    log.info(f"  Sin teléfono (omitidos): {sin_telefono}")
 
-        # Escribir lista completa a HA via shell_command
-        if not DRY_RUN:
-            ok = ha_post("/services/shell_command/actualizar_porton", {
-                "autorizados": json.dumps(autorizados, ensure_ascii=False),
-            })
-            if ok is None:
-                log.error("Error escribiendo lista de autorizados en HA.")
-            else:
-                log.info(f"  Lista escrita en HA correctamente.")
+    if not DRY_RUN:
+        # Limpiar archivo primero
+        ok = ha_post("/services/shell_command/limpiar_porton", {})
+        if ok is None:
+            log.error("Error limpiando archivo de autorizados en HA — abortando sync portón.")
         else:
-            log.info(f"  [DRY RUN] Se escribirían {len(autorizados)} autorizados en HA.")
+            log.info("  Archivo limpiado. Escribiendo autorizados...")
+            errores_ha = 0
+            for telefono, datos in autorizados.items():
+                resultado = ha_post("/services/shell_command/agregar_autorizado", {
+                    "telefono": telefono,
+                    "nombre":   datos["nombre"],
+                    "pco_id":   str(datos["pco_id"]),
+                })
+                if resultado is None:
+                    log.error(f"  Error agregando {datos['nombre']} ({telefono})")
+                    errores_ha += 1
+                time.sleep(0.3)
 
-        time.sleep(DELAY_ENTRE_LLAMADAS)
+            if errores_ha == 0:
+                log.info(f"  {len(autorizados)} autorizados escritos en HA correctamente.")
+            else:
+                log.warning(f"  {len(autorizados) - errores_ha} escritos, {errores_ha} errores.")
+    else:
+        log.info(f"  [DRY RUN] Se escribirían {len(autorizados)} autorizados en HA.")
 
     # ── 6. Resumen final ──────────────────────────────────────────────────────
     log.info("")
