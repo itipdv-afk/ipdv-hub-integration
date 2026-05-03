@@ -89,14 +89,11 @@ def main():
     if not a_sincronizar:
         log.warning("No hay personas que cumplan todos los requisitos para Loyverse.")
     else:
-        for i, persona in enumerate(a_sincronizar, 1):
-            nombre = f"{persona['first_name']} {persona['last_name']}".strip()
-            log.info(f"[{i}/{len(a_sincronizar)}] {nombre} "
-                     f"(edad={persona['edad']}, RUT={persona['rut']}, email={persona['email']})")
-
+        for persona in a_sincronizar:
             resultado = sincronizar_persona(persona)
             stats_loyverse[resultado] = stats_loyverse.get(resultado, 0) + 1
             time.sleep(DELAY_ENTRE_LLAMADAS)
+        log.info(f"  {len(a_sincronizar)} personas sincronizadas con Loyverse.")
 
     # ── 5. Sincronizar portón → Home Assistant ────────────────────────────────
         log.info("")
