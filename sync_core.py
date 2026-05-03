@@ -500,17 +500,19 @@ def cumple_condiciones(persona: dict, emails_en_pco: set = None) -> tuple[bool, 
 
 
 def califica_porton(persona: dict) -> bool:
-    """
-    Retorna True si la persona debe tener acceso al portón.
-    Soporta campo de valor único (string) y selección múltiple (lista).
-    """
     acceso = persona.get("acceso_porton")
     valor_buscar = PCO_VALOR_PORTON.strip().lower()
-
+    
+    log.info(f"califica_porton: acceso={repr(acceso)} valor_buscar={repr(valor_buscar)}")
+    
     if isinstance(acceso, list):
-        return any(v.strip().lower() == valor_buscar for v in acceso)
+        resultado = any(v.strip().lower() == valor_buscar for v in acceso)
+        log.info(f"califica_porton: lista, resultado={resultado}")
+        return resultado
     elif isinstance(acceso, str):
-        return acceso.strip().lower() == valor_buscar
+        resultado = acceso.strip().lower() == valor_buscar
+        log.info(f"califica_porton: string, resultado={resultado}")
+        return resultado
     return False
 
 # ─── LOYVERSE ─────────────────────────────────────────────────────────────────
