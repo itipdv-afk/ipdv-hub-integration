@@ -508,15 +508,11 @@ def califica_porton(persona: dict) -> bool:
     acceso = persona.get("acceso_porton")
     valor_buscar = PCO_VALOR_PORTON.strip().lower()
     
-    log.info(f"califica_porton: acceso={repr(acceso)} valor_buscar={repr(valor_buscar)}")
-    
     if isinstance(acceso, list):
         resultado = any(v.strip().lower() == valor_buscar for v in acceso)
-        log.info(f"califica_porton: lista, resultado={resultado}")
         return resultado
     elif isinstance(acceso, str):
         resultado = acceso.strip().lower() == valor_buscar
-        log.info(f"califica_porton: string, resultado={resultado}")
         return resultado
     return False
 
