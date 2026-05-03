@@ -120,6 +120,12 @@ def main():
 
         resultado = sincronizar_porton_ha(persona)
         stats_porton[resultado] = stats_porton.get(resultado, 0) + 1
+        
+        # Si hay error de HA, detener para no procesar registros en falso
+        if resultado == "error_ha":
+            log.error("Error conectando con HA — deteniendo sync portón.")
+            break
+
         time.sleep(DELAY_ENTRE_LLAMADAS)
 
     # ── 6. Resumen final ──────────────────────────────────────────────────────
