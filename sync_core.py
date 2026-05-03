@@ -460,7 +460,12 @@ def _parsear_persona(person: dict, emails_idx: dict, phones_idx: dict,
     campos = (campos_bulk or {}).get(pid, {})
 
     # Campo portón: normalizado a minúsculas para comparación robusta
-    acceso_porton = normalizar(campos.get(PCO_CAMPO_PORTON))
+    acceso_porton_raw = campos.get(PCO_CAMPO_PORTON)
+    if isinstance(acceso_porton_raw, list):
+        acceso_porton = [normalizar(v) for v in acceso_porton_raw if normalizar(v)]
+    else:
+        acceso_porton = normalizar(acceso_porton_raw)
+
 
     return {
         "pco_id":         pid,
