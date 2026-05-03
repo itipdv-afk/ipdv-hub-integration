@@ -151,11 +151,8 @@ def main():
     log.info(f"    Simulados:    {stats_loyverse.get('simulado', 0)}")
     log.info(f"    Errores:      {stats_loyverse.get('error', 0)}")
     log.info("  Portón HA:")
-    log.info(f"    Agregados:    {stats_porton.get('agregado', 0)}")
-    log.info(f"    Eliminados:   {stats_porton.get('eliminado', 0)}")
-    log.info(f"    Sin teléfono: {stats_porton.get('sin_telefono', 0)}")
-    log.info(f"    Omitidos:     {stats_porton.get('omitido', 0)}")
-    log.info(f"    Errores HA:   {stats_porton.get('error_ha', 0)}")
+    log.info(f"    Autorizados escritos: {len(autorizados)}")
+    log.info(f"    Sin teléfono:         {sin_telefono}")
     log.info("─" * 60)
     log.info("  Sincronización completada.")
 
