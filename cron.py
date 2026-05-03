@@ -13,7 +13,7 @@ from collections import Counter
 from sync_core import (
     log, DRY_RUN, PCO_RUT_FILTER, EDAD_MINIMA, DELAY_ENTRE_LLAMADAS,
     obtener_personas_pco, cumple_condiciones, sincronizar_persona,
-    sincronizar_porton_ha,
+    sincronizar_porton_ha, califica_porton, formatear_telefono, ha_post,
 )
 
 
@@ -99,32 +99,44 @@ def main():
             time.sleep(DELAY_ENTRE_LLAMADAS)
 
     # ── 5. Sincronizar portón → Home Assistant ────────────────────────────────
-    log.info("")
-    log.info("─" * 60)
-    log.info("  SINCRONIZACIÓN → HOME ASSISTANT (PORTÓN)")
-    log.info("─" * 60)
-    log.info(f"  Procesando {len(todas)} personas activas...")
+        log.info("")
+        log.info("─" * 60)
+        log.info("  SINCRONIZACIÓN → HOME ASSISTANT (PORTÓN)")
+        log.info("─" * 60)
 
-    stats_porton = {
-        "agregado":    0,
-        "eliminado":   0,
-        "omitido":     0,
-        "sin_telefono": 0,
-        "error_ha":    0,
-    }
+        # Construir lista completa de autorizados desde PCO
+        import json
+        autorizados = {}
+        sin_telefono = 0
 
-    for i, persona in enumerate(todas, 1):
-        nombre = f"{persona['first_name']} {persona['last_name']}".strip()
-        acceso = persona.get("acceso_porton")
-        log.info(f"[{i}/{len(todas)}] {nombre} | portón={acceso}")
+        for persona in todas:
+            if not califica_porton(persona):
+                continue
+            telefono = formatear_telefono(persona.get("phone") or "")
+            if not telefono:
+                sin_telefono += 1
+                continue
+            nombre = f"{persona['first_name']} {persona['last_name']}".strip()
+            autorizados[telefono] = {
+                "nombre": nombre,
+                "pco_id": persona["pco_id"],
+                "expira": None,
+            }
 
-        resultado = sincronizar_porton_ha(persona)
-        stats_porton[resultado] = stats_porton.get(resultado, 0) + 1
-        
-        # Si hay error de HA, detener para no procesar registros en falso
-        if resultado == "error_ha":
-            log.error("Error conectando con HA — deteniendo sync portón.")
-            break
+        log.info(f"  Autorizados encontrados: {len(autorizados)}")
+        log.info(f"  Sin teléfono (omitidos): {sin_telefono}")
+
+        # Escribir lista completa a HA via shell_command
+        if not DRY_RUN:
+            ok = ha_post("/services/shell_command/actualizar_porton", {
+                "autorizados": json.dumps(autorizados, ensure_ascii=False),
+            })
+            if ok is None:
+                log.error("Error escribiendo lista de autorizados en HA.")
+            else:
+                log.info(f"  Lista escrita en HA correctamente.")
+        else:
+            log.info(f"  [DRY RUN] Se escribirían {len(autorizados)} autorizados en HA.")
 
         time.sleep(DELAY_ENTRE_LLAMADAS)
 
