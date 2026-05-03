@@ -33,6 +33,7 @@ COPY webhook.py .
 COPY receipt_mailer.py .
 COPY register_webhook.py .
 COPY start.sh .
+COPY start_cron.sh .
 RUN chmod +x start.sh
 
 RUN mkdir -p /app/logs
