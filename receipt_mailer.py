@@ -86,8 +86,8 @@ def _build_receipt_html(receipt: dict, customer_name: str,
     total          = _fmt_money(receipt.get("total_money"))
     payments       = receipt.get("payments", [])
     line_items     = receipt.get("line_items", [])
-    employee_name  = receipt.get("employee_name", "")
-    pos_device     = receipt.get("pos_device_name", "")
+    note           = (receipt.get("note") or "").strip()
+    order          = (receipt.get("order") or "").strip()
 
     has_transfer = any(_is_transfer(p) for p in payments)
 
@@ -147,19 +147,14 @@ def _build_receipt_html(receipt: dict, customer_name: str,
           </td>
         </tr>"""
 
-    # Empleado / TPV
-    employee_block = ""
-    if employee_name or pos_device:
-        parts = []
-        if employee_name:
-            parts.append(f"Empleado: {employee_name}")
-        if pos_device:
-            parts.append(f"TPV: {pos_device}")
-        employee_block = f"""
+    # Pedido (order)
+    order_block = ""
+    if order:
+        order_block = f"""
         <tr>
           <td colspan="2" style="padding:4px 0 8px;font-size:11px;color:#999;
                                   border-bottom:1px solid #eeeeee;">
-            {" &nbsp;|&nbsp; ".join(parts)}
+            Pedido: {order}
           </td>
         </tr>"""
 
@@ -175,6 +170,17 @@ def _build_receipt_html(receipt: dict, customer_name: str,
           <td colspan="2" style="padding:6px 0 8px;font-size:12px;color:#333;
                                   border-bottom:1px solid #eeeeee;">
             Cliente: <strong>{customer_name}</strong>{phone_line}
+          </td>
+        </tr>"""
+
+    # Nota del cajero
+    note_block = ""
+    if note:
+        note_block = f"""
+        <tr>
+          <td colspan="2" style="padding:6px 0 8px;font-size:11px;color:#666;
+                                  font-style:italic;border-bottom:1px solid #eeeeee;">
+            Nota: {note}
           </td>
         </tr>"""
 
@@ -200,8 +206,9 @@ def _build_receipt_html(receipt: dict, customer_name: str,
 
       <div style="padding:14px 28px;">
         <table style="width:100%;border-collapse:collapse;">
-          {employee_block}
+          {order_block}
           {customer_block}
+          {note_block}
           {rows_html}
           <tr>
             <td style="padding:8px 0 4px;font-size:14px;font-weight:bold;color:#111;">Total</td>
