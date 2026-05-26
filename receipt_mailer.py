@@ -7,18 +7,16 @@ El correo incluye el comprobante en HTML + PDF adjunto.
 """
 
 import os
-import smtplib
 import logging
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
+import base64
+import requests
 from datetime import datetime
 
 log = logging.getLogger(__name__)
 
 # ── Configuración ─────────────────────────────────────────────────────────────
-GMAIL_USER     = os.environ["GMAIL_USER"]
-GMAIL_APP_PASS = os.environ["GMAIL_APP_PASS"]
+RESEND_API_KEY = os.environ["RESEND_API_KEY"]
+RESEND_FROM    = os.getenv("RESEND_FROM", "onboarding@resend.dev")
 STORE_NAME     = os.getenv("STORE_NAME", "Cafetería IPDV")
 STORE_SUBTITLE = os.getenv("STORE_SUBTITLE", "Cafetería IPDV")
 STORE_SLOGAN   = os.getenv("STORE_SLOGAN", "El Señor guarde tu vida y seas luz y bendición a otros")
@@ -228,13 +226,151 @@ def _build_receipt_html(receipt: dict, customer_name: str,
     body {{
       margin: 0;
       padding: 0;
-      background: #ffffff;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
+      font-family: Arial, sans-serif;
+      font-size: 12px;
+      color: #333;
+    }}
+    .card {{
+      width: 100%;
+    }}
+    .header {{
+      text-align: center;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 8px;
+      margin-bottom: 8px;
+    }}
+    .logo {{
+      max-height: 60px;
+      max-width: 120px;
+    }}
+    .store-name {{
+      font-size: 13px;
+      font-weight: bold;
+      margin: 4px 0 0;
+    }}
+    .slogan {{
+      font-size: 9px;
+      color: #aaa;
+      font-style: italic;
+    }}
+    .total-block {{
+      text-align: center;
+      border-bottom: 1px solid #eee;
+      padding: 8px 0;
+      margin-bottom: 8px;
+    }}
+    .total-amount {{
+      font-size: 28px;
+      font-weight: bold;
+    }}
+    .total-label {{
+      font-size: 9px;
+      color: #bbb;
+      text-transform: uppercase;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+    }}
+    td {{
+      padding: 4px 0;
+      vertical-align: top;
+    }}
+    .meta {{
+      font-size: 10px;
+      color: #999;
+      border-bottom: 1px solid #eee;
+    }}
+    .item-name {{
+      font-size: 12px;
+    }}
+    .item-qty {{
+      font-size: 10px;
+      color: #888;
+    }}
+    .divider td {{
+      border-bottom: 1px solid #eee;
+      padding: 0;
+      height: 1px;
+    }}
+    .total-row td {{
+      font-weight: bold;
+      font-size: 13px;
+      padding-top: 6px;
+    }}
+    .bank-box {{
+      background: {bank_bg};
+      border: 1px solid {bank_border};
+      padding: 6px 8px;
+      margin-top: 8px;
+      font-size: 10px;
+    }}
+    .bank-alert {{
+      color: #b45309;
+      font-weight: bold;
+      margin-bottom: 3px;
+    }}
+    .transfer {{
+      color: #b45309;
+      font-weight: bold;
+    }}
+    .footer {{
+      border-top: 1px solid #eee;
+      margin-top: 8px;
+      padding-top: 4px;
+      font-size: 9px;
+      color: #ccc;
+    }}
+    .footer-right {{
+      text-align: right;
     }}
   </style>
 </head>
-<body>{card}</body>
+<body>
+<div class="card">
+
+  <div class="header">
+    <img src="{STORE_LOGO_URL}" class="logo" alt="{STORE_NAME}">
+    <p class="store-name">{STORE_NAME}</p>
+    <p class="slogan">{STORE_SLOGAN}</p>
+  </div>
+
+  <div class="total-block">
+    <div class="total-amount">{total}</div>
+    <div class="total-label">Total</div>
+  </div>
+
+  <table>
+    {'<tr><td colspan="2" class="meta">' + " &nbsp;|&nbsp; ".join(([f"Empleado: {employee_name}"] if employee_name else []) + ([f"TPV: {pos_device}"] if pos_device else [])) + '</td></tr>' if employee_name or pos_device else ''}
+    {'<tr><td colspan="2" style="font-size:11px;padding:4px 0;border-bottom:1px solid #eee;">Cliente: <b>' + customer_name + '</b>' + (f'<br/><span style="color:#999">{customer_phone}</span>' if customer_phone else '') + '</td></tr>' if customer_name else ''}
+    {rows_html}
+    <tr class="total-row">
+      <td>Total</td>
+      <td style="text-align:right">{total}</td>
+    </tr>
+    {payments_html}
+  </table>
+
+  <div class="bank-box">
+    {'<div class="bank-alert">Pago pendiente por transferencia</div>' if has_transfer else ''}
+    <div style="{'font-weight:bold;color:#78350f' if has_transfer else ''}">
+      Transferencias a:<br/>
+      <b>{BANK_HOLDER}</b><br/>
+      {BANK_NAME}<br/>
+      {BANK_ACCOUNT}<br/>
+      {BANK_RUT}
+    </div>
+  </div>
+
+  <table class="footer">
+    <tr>
+      <td>{created_at}</td>
+      <td class="footer-right">N&deg; {receipt_number}</td>
+    </tr>
+  </table>
+
+</div>
+</body>
 </html>"""
     else:
         return f"""<!DOCTYPE html>
@@ -257,13 +393,18 @@ def _build_receipt_html(receipt: dict, customer_name: str,
 def _generate_pdf(receipt: dict, customer_name: str,
                   customer_phone: str = "") -> bytes | None:
     try:
-        from weasyprint import HTML as WeasyHTML
-        html_str  = _build_receipt_html(receipt, customer_name,
-                                        customer_phone, for_pdf=True)
-        pdf_bytes = WeasyHTML(string=html_str).write_pdf()
-        return pdf_bytes
+        from io import BytesIO
+        from xhtml2pdf import pisa
+        html_str = _build_receipt_html(receipt, customer_name,
+                                       customer_phone, for_pdf=True)
+        buf = BytesIO()
+        result = pisa.CreatePDF(html_str, dest=buf)
+        if result.err:
+            log.error(f"xhtml2pdf error: {result.err}")
+            return None
+        return buf.getvalue()
     except ImportError:
-        log.warning("WeasyPrint no instalado — se omite el PDF adjunto.")
+        log.warning("xhtml2pdf no instalado — se omite el PDF adjunto.")
         return None
     except Exception as e:
         log.error(f"Error generando PDF: {e}")
@@ -277,13 +418,6 @@ def send_receipt_email(receipt: dict, customer_email: str,
     receipt_number = receipt.get("receipt_number", "comprobante")
     subject = f"Tu comprobante de compra #{receipt_number} — {STORE_NAME}"
 
-    msg            = MIMEMultipart("mixed")
-    msg["Subject"] = subject
-    msg["From"]    = f"{STORE_NAME} <{GMAIL_USER}>"
-    msg["To"]      = customer_email
-
-    # Cuerpo: texto plano + HTML
-    alt_part   = MIMEMultipart("alternative")
     total      = _fmt_money(receipt.get("total_money"))
     created_at = _fmt_date(receipt.get("created_at"))
     plain_text = (
@@ -296,40 +430,47 @@ def send_receipt_email(receipt: dict, customer_email: str,
         f"{BANK_ACCOUNT} | {BANK_RUT}\n\n"
         f"Este correo fue generado automáticamente."
     )
-    alt_part.attach(MIMEText(plain_text, "plain", "utf-8"))
-    alt_part.attach(MIMEText(
-        _build_receipt_html(receipt, customer_name, customer_phone, for_pdf=False),
-        "html", "utf-8",
-    ))
-    msg.attach(alt_part)
 
-    # PDF adjunto
+    html_body = _build_receipt_html(receipt, customer_name,
+                                    customer_phone, for_pdf=False)
+
+    # Payload base para Resend
+    payload = {
+        "from":    f"{STORE_NAME} <{RESEND_FROM}>",
+        "to":      [customer_email],
+        "subject": subject,
+        "text":    plain_text,
+        "html":    html_body,
+    }
+
+    # PDF adjunto (si se genera correctamente)
     pdf_bytes = _generate_pdf(receipt, customer_name, customer_phone)
     if pdf_bytes:
-        pdf_part = MIMEApplication(pdf_bytes, _subtype="pdf")
-        pdf_part.add_header(
-            "Content-Disposition",
-            "attachment",
-            filename=f"comprobante_{receipt_number}.pdf",
-        )
-        msg.attach(pdf_part)
+        filename = f"comprobante_{receipt_number}.pdf"
+        payload["attachments"] = [{
+            "filename": filename,
+            "content":  base64.b64encode(pdf_bytes).decode("utf-8"),
+        }]
         log.info(f"PDF generado ({len(pdf_bytes)} bytes) para receipt #{receipt_number}")
     else:
         log.warning(f"Enviando sin PDF para receipt #{receipt_number}")
 
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(GMAIL_USER, GMAIL_APP_PASS)
-            server.sendmail(GMAIL_USER, customer_email, msg.as_string())
-        log.info(f"✉️  Comprobante enviado a {customer_email} (receipt #{receipt_number})")
-        return True
-    except smtplib.SMTPAuthenticationError:
-        log.error("Gmail: error de autenticación. Verifica GMAIL_USER y GMAIL_APP_PASS.")
-    except smtplib.SMTPException as e:
-        log.error(f"Gmail SMTP error: {e}")
-    except Exception as e:
-        log.error(f"Error inesperado al enviar email: {e}")
-    return False
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type":  "application/json",
+            },
+            json=payload,
+            timeout=15,
+        )
+        if resp.status_code in (200, 201):
+            log.info(f"✉️  Comprobante enviado a {customer_email} (receipt #{receipt_number})")
+            return True
+        else:
+            log.error(f"Resend error {resp.status_code}: {resp.text}")
+            return False
+    except requests.RequestException as e:
+        log.error(f"Error conectando con Resend: {e}")
+        return False
