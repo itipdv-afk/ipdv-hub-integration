@@ -9,14 +9,22 @@ El correo incluye el comprobante en HTML + PDF adjunto.
 import os
 import logging
 import base64
-import requests
+import requests as http_requests
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 from datetime import datetime
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request as GoogleRequest
+from googleapiclient.discovery import build
 
 log = logging.getLogger(__name__)
 
 # ── Configuración ─────────────────────────────────────────────────────────────
-RESEND_API_KEY = os.environ["RESEND_API_KEY"]
-RESEND_FROM    = os.getenv("RESEND_FROM", "onboarding@resend.dev")
+GMAIL_USER      = os.getenv("GMAIL_USER", "it.ipdv@gmail.com")
+GOOGLE_CLIENT_ID     = os.environ["GOOGLE_CLIENT_ID"]
+GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
+GOOGLE_REFRESH_TOKEN = os.environ["GOOGLE_REFRESH_TOKEN"]
 STORE_NAME     = os.getenv("STORE_NAME", "Cafetería IPDV")
 STORE_SUBTITLE = os.getenv("STORE_SUBTITLE", "Cafetería IPDV")
 STORE_SLOGAN   = os.getenv("STORE_SLOGAN", "El Señor guarde tu vida y seas luz y bendición a otros")
@@ -411,6 +419,22 @@ def _generate_pdf(receipt: dict, customer_name: str,
         return None
 
 
+# ── Gmail API ─────────────────────────────────────────────────────────────────
+
+def _get_gmail_service():
+    """Obtiene el servicio de Gmail API con credenciales OAuth2."""
+    creds = Credentials(
+        token=None,
+        refresh_token=GOOGLE_REFRESH_TOKEN,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        scopes=["https://www.googleapis.com/auth/gmail.send"],
+    )
+    creds.refresh(GoogleRequest())
+    return build("gmail", "v1", credentials=creds)
+
+
 # ── Función principal ─────────────────────────────────────────────────────────
 
 def send_receipt_email(receipt: dict, customer_email: str,
@@ -431,46 +455,41 @@ def send_receipt_email(receipt: dict, customer_email: str,
         f"Este correo fue generado automáticamente."
     )
 
-    html_body = _build_receipt_html(receipt, customer_name,
-                                    customer_phone, for_pdf=False)
+    msg            = MIMEMultipart("mixed")
+    msg["Subject"] = subject
+    msg["From"]    = f"{STORE_NAME} <{GMAIL_USER}>"
+    msg["To"]      = customer_email
 
-    # Payload base para Resend
-    payload = {
-        "from":    f"{STORE_NAME} <{RESEND_FROM}>",
-        "to":      [customer_email],
-        "subject": subject,
-        "text":    plain_text,
-        "html":    html_body,
-    }
+    alt_part = MIMEMultipart("alternative")
+    alt_part.attach(MIMEText(plain_text, "plain", "utf-8"))
+    alt_part.attach(MIMEText(
+        _build_receipt_html(receipt, customer_name, customer_phone, for_pdf=False),
+        "html", "utf-8",
+    ))
+    msg.attach(alt_part)
 
-    # PDF adjunto (si se genera correctamente)
+    # PDF adjunto (opcional)
     pdf_bytes = _generate_pdf(receipt, customer_name, customer_phone)
     if pdf_bytes:
-        filename = f"comprobante_{receipt_number}.pdf"
-        payload["attachments"] = [{
-            "filename": filename,
-            "content":  base64.b64encode(pdf_bytes).decode("utf-8"),
-        }]
+        pdf_part = MIMEApplication(pdf_bytes, _subtype="pdf")
+        pdf_part.add_header(
+            "Content-Disposition", "attachment",
+            filename=f"comprobante_{receipt_number}.pdf",
+        )
+        msg.attach(pdf_part)
         log.info(f"PDF generado ({len(pdf_bytes)} bytes) para receipt #{receipt_number}")
     else:
         log.warning(f"Enviando sin PDF para receipt #{receipt_number}")
 
     try:
-        resp = requests.post(
-            "https://api.resend.com/emails",
-            headers={
-                "Authorization": f"Bearer {RESEND_API_KEY}",
-                "Content-Type":  "application/json",
-            },
-            json=payload,
-            timeout=15,
-        )
-        if resp.status_code in (200, 201):
-            log.info(f"✉️  Comprobante enviado a {customer_email} (receipt #{receipt_number})")
-            return True
-        else:
-            log.error(f"Resend error {resp.status_code}: {resp.text}")
-            return False
-    except requests.RequestException as e:
-        log.error(f"Error conectando con Resend: {e}")
+        service = _get_gmail_service()
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+        service.users().messages().send(
+            userId="me",
+            body={"raw": raw},
+        ).execute()
+        log.info(f"✉️  Comprobante enviado a {customer_email} (receipt #{receipt_number})")
+        return True
+    except Exception as e:
+        log.error(f"Error enviando email via Gmail API: {e}")
         return False
