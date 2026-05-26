@@ -83,6 +83,8 @@ def _build_receipt_html(receipt: dict, customer_name: str,
     line_items     = receipt.get("line_items", [])
     note           = (receipt.get("note") or "").strip()
     order          = (receipt.get("order") or "").strip()
+    is_refund      = receipt.get("receipt_type", "").upper() == "REFUND"
+    refund_for     = receipt.get("refund_for", "")
 
     has_transfer = any(_is_transfer(p) for p in payments)
 
@@ -116,16 +118,17 @@ def _build_receipt_html(receipt: dict, customer_name: str,
           <td style="padding:3px 0;font-size:12px;text-align:right;{style}">{amount}</td>
         </tr>"""
 
-    # Datos bancarios
-    bank_notice = (
-        "<p style='margin:0 0 4px;font-size:11px;color:#b45309;font-weight:bold;'>"
-        "Pago pendiente por transferencia</p>"
-    ) if has_transfer else ""
-    bank_bg     = "#fffbeb" if has_transfer else "#f9f9f9"
-    bank_border = "#fcd34d" if has_transfer else "#e5e5e5"
-    bank_text   = "font-weight:bold;color:#78350f;" if has_transfer else "color:#555;"
-
-    bank_block = f"""
+    # Datos bancarios (solo en ventas normales)
+    bank_block = ""
+    if not is_refund:
+        bank_notice = (
+            "<p style='margin:0 0 4px;font-size:11px;color:#b45309;font-weight:bold;'>"
+            "Pago pendiente por transferencia</p>"
+        ) if has_transfer else ""
+        bank_bg     = "#fffbeb" if has_transfer else "#f9f9f9"
+        bank_border = "#fcd34d" if has_transfer else "#e5e5e5"
+        bank_text   = "font-weight:bold;color:#78350f;" if has_transfer else "color:#555;"
+        bank_block  = f"""
         <tr>
           <td colspan="2" style="padding-top:14px;">
             <div style="background:{bank_bg};border:1px solid {bank_border};
@@ -141,6 +144,18 @@ def _build_receipt_html(receipt: dict, customer_name: str,
             </div>
           </td>
         </tr>"""
+
+    # Banner de reembolso
+    refund_banner = ""
+    if is_refund:
+        refund_for_line = f"<br><span style='font-size:11px;'>Anulación del comprobante N° {refund_for}</span>" if refund_for else ""
+        refund_banner = f"""
+      <div style="background:#fef2f2;border-bottom:1px solid #fecaca;
+                  padding:10px 28px;text-align:center;">
+        <p style="margin:0;font-size:13px;font-weight:bold;color:#dc2626;">
+          ⚠ Reembolso{refund_for_line}
+        </p>
+      </div>"""
 
     # Pedido (order)
     order_block = ""
@@ -192,10 +207,12 @@ def _build_receipt_html(receipt: dict, customer_name: str,
         <p style="margin:4px 0 0;font-size:10px;color:#aaa;font-style:italic;">{STORE_SLOGAN}</p>
       </div>
 
+      {refund_banner}
+
       <div style="padding:18px 28px 14px;text-align:center;border-bottom:1px solid #eeeeee;">
         <p style="margin:0;font-size:34px;font-weight:bold;color:#111;">{total}</p>
         <p style="margin:4px 0 0;font-size:10px;color:#bbb;letter-spacing:1px;
-                  text-transform:uppercase;">Total</p>
+                  text-transform:uppercase;">{'Reembolso' if is_refund else 'Total'}</p>
       </div>
 
       <div style="padding:14px 28px;">
@@ -261,20 +278,34 @@ def _get_gmail_service():
 def send_receipt_email(receipt: dict, customer_email: str,
                        customer_name: str, customer_phone: str = "") -> bool:
     receipt_number = receipt.get("receipt_number", "comprobante")
-    subject        = f"Recibo de {STORE_NAME}"
+    is_refund      = receipt.get("receipt_type", "").upper() == "REFUND"
+    subject        = f"Reembolso de {STORE_NAME}" if is_refund else f"Recibo de {STORE_NAME}"
 
     total      = _fmt_money(receipt.get("total_money"))
     created_at = _fmt_date(receipt.get("created_at"))
-    plain_text = (
-        f"Hola {customer_name},\n\n"
-        f"Gracias por tu compra en {STORE_NAME}.\n\n"
-        f"Comprobante N°: {receipt_number}\n"
-        f"Fecha: {created_at}\n"
-        f"Total: {total}\n\n"
-        f"Transferencias a: {BANK_HOLDER} | {BANK_NAME} | "
-        f"{BANK_ACCOUNT} | {BANK_RUT}\n\n"
-        f"Este correo fue generado automáticamente."
-    )
+    refund_for = receipt.get("refund_for", "")
+
+    if is_refund:
+        plain_text = (
+            f"Hola {customer_name},\n\n"
+            f"Te informamos que se ha procesado un reembolso en {STORE_NAME}.\n\n"
+            f"Comprobante N°: {receipt_number}\n"
+            + (f"Anulación del comprobante N°: {refund_for}\n" if refund_for else "")
+            + f"Fecha: {created_at}\n"
+            f"Monto reembolsado: {total}\n\n"
+            f"Este correo fue generado automáticamente."
+        )
+    else:
+        plain_text = (
+            f"Hola {customer_name},\n\n"
+            f"Gracias por tu compra en {STORE_NAME}.\n\n"
+            f"Comprobante N°: {receipt_number}\n"
+            f"Fecha: {created_at}\n"
+            f"Total: {total}\n\n"
+            f"Transferencias a: {BANK_HOLDER} | {BANK_NAME} | "
+            f"{BANK_ACCOUNT} | {BANK_RUT}\n\n"
+            f"Este correo fue generado automáticamente."
+        )
 
     msg            = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -294,7 +325,7 @@ def send_receipt_email(receipt: dict, customer_email: str,
             userId="me",
             body={"raw": raw},
         ).execute()
-        log.info(f"✉️  Comprobante enviado a {customer_email} (receipt #{receipt_number})")
+        log.info(f"✉️  {'Reembolso' if is_refund else 'Comprobante'} enviado a {customer_email} (receipt #{receipt_number})")
         return True
     except Exception as e:
         log.error(f"Error enviando email via Gmail API: {e}")
