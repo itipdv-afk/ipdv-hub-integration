@@ -138,6 +138,7 @@ def webhook_loyverse():
 
         log.info(f"Loyverse receipt recibido: #{receipt_number} | customer_id: {customer_id or 'ninguno'}")
         log.info(f"Payments raw: {receipt.get('payments')}")  # ← agregar esta línea
+        log.info(f"Receipt completo: {json.dumps(receipt, indent=2)}")
 
         if not customer_id:
             log.info(f"Receipt #{receipt_number}: sin cliente, se omite.")
