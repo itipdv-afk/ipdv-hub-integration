@@ -149,9 +149,13 @@ Opciones a evaluar:
 
 ## Próximos pasos
 
-1. Definir lógica del campo `order` con ejemplo concreto
-2. Resolver PDF adjunto (evaluar imagen no-slim en Dockerfile)
-3. Implementar monitor de estado de servicios
+1. **Panel de administración web** (PRIORIDAD) — interfaz simple accesible desde el navegador para:
+   - Editar datos de la tienda (nombre, slogan, logo)
+   - Editar datos bancarios (banco, cuenta, RUT, titular)
+   - Ver estado de los servicios (Loyverse webhook, APIs, Railway)
+   - Ver log de últimos comprobantes enviados
+2. Definir lógica del campo `order` con ejemplo concreto
+3. Resolver PDF adjunto (evaluar imagen no-slim en Dockerfile)
 
 ---
 
