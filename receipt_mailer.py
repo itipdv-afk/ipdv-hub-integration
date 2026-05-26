@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """
 ==============================================================================
-RECEIPT MAILER — Envío automático de comprobantes de venta por Gmail
-El correo incluye el comprobante en HTML + PDF adjunto.
+RECEIPT MAILER — Envío automático de comprobantes de venta por Gmail API
 ==============================================================================
 """
 
 import os
 import logging
 import base64
-import requests as http_requests
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
 from datetime import datetime
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleRequest
@@ -21,13 +18,13 @@ from googleapiclient.discovery import build
 log = logging.getLogger(__name__)
 
 # ── Configuración ─────────────────────────────────────────────────────────────
-GMAIL_USER      = os.getenv("GMAIL_USER", "it.ipdv@gmail.com")
+GMAIL_USER           = os.getenv("GMAIL_USER", "it.ipdv@gmail.com")
 GOOGLE_CLIENT_ID     = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 GOOGLE_REFRESH_TOKEN = os.environ["GOOGLE_REFRESH_TOKEN"]
-STORE_NAME     = os.getenv("STORE_NAME", "Cafetería IPDV")
+STORE_NAME     = os.getenv("STORE_NAME",     "Cafetería IPDV")
 STORE_SUBTITLE = os.getenv("STORE_SUBTITLE", "Iglesia Presbiteriana del Valle de Lonquén")
-STORE_SLOGAN   = os.getenv("STORE_SLOGAN", "El Señor guarde tu vida, seas luz y bendición (Núm. 6:24-25)")
+STORE_SLOGAN   = os.getenv("STORE_SLOGAN",   "El Señor guarde tu vida, seas luz y bendición (Núm. 6:24-25)")
 STORE_LOGO_URL = os.getenv("STORE_LOGO_URL", "https://res.cloudinary.com/dtbnavw3j/image/upload/v1777608874/Logo_IPDV_k0fstz.png")
 
 BANK_NAME    = os.getenv("BANK_NAME",    "Banco Estado")
@@ -72,15 +69,13 @@ def _payment_label(payment: dict) -> str:
 
 def _is_transfer(payment: dict) -> bool:
     """Detecta si el pago es transferencia pendiente por el nombre."""
-    label = _payment_label(payment).lower()
-    return "pendiente" in label
+    return "pendiente" in _payment_label(payment).lower()
 
 
-# ── HTML compartido (email y PDF) ─────────────────────────────────────────────
+# ── HTML del comprobante ──────────────────────────────────────────────────────
 
 def _build_receipt_html(receipt: dict, customer_name: str,
-                        customer_phone: str = "",
-                        for_pdf: bool = False) -> str:
+                        customer_phone: str = "") -> str:
     receipt_number = receipt.get("receipt_number", "—")
     created_at     = _fmt_date(receipt.get("created_at"))
     total          = _fmt_money(receipt.get("total_money"))
@@ -186,8 +181,7 @@ def _build_receipt_html(receipt: dict, customer_name: str,
 
     card = f"""
     <div style="background:#ffffff;border-radius:8px;border:1px solid #e0e0e0;
-                width:360px;max-width:360px;font-family:Arial,sans-serif;overflow:hidden;
-                {'margin:0 auto;' if for_pdf else ''}">
+                width:360px;max-width:360px;font-family:Arial,sans-serif;overflow:hidden;">
 
       <div style="padding:20px 28px 14px;text-align:center;border-bottom:1px solid #eeeeee;">
         <img src="{STORE_LOGO_URL}" alt="{STORE_NAME}"
@@ -231,167 +225,7 @@ def _build_receipt_html(receipt: dict, customer_name: str,
 
     </div>"""
 
-    if for_pdf:
-        return f"""<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <style>
-    @page {{
-      size: 90mm 220mm;
-      margin: 5mm;
-    }}
-    body {{
-      margin: 0;
-      padding: 0;
-      font-family: Arial, sans-serif;
-      font-size: 12px;
-      color: #333;
-    }}
-    .card {{
-      width: 100%;
-    }}
-    .header {{
-      text-align: center;
-      border-bottom: 1px solid #eee;
-      padding-bottom: 8px;
-      margin-bottom: 8px;
-    }}
-    .logo {{
-      max-height: 60px;
-      max-width: 120px;
-    }}
-    .store-name {{
-      font-size: 13px;
-      font-weight: bold;
-      margin: 4px 0 0;
-    }}
-    .slogan {{
-      font-size: 9px;
-      color: #aaa;
-      font-style: italic;
-    }}
-    .total-block {{
-      text-align: center;
-      border-bottom: 1px solid #eee;
-      padding: 8px 0;
-      margin-bottom: 8px;
-    }}
-    .total-amount {{
-      font-size: 28px;
-      font-weight: bold;
-    }}
-    .total-label {{
-      font-size: 9px;
-      color: #bbb;
-      text-transform: uppercase;
-    }}
-    table {{
-      width: 100%;
-      border-collapse: collapse;
-    }}
-    td {{
-      padding: 4px 0;
-      vertical-align: top;
-    }}
-    .meta {{
-      font-size: 10px;
-      color: #999;
-      border-bottom: 1px solid #eee;
-    }}
-    .item-name {{
-      font-size: 12px;
-    }}
-    .item-qty {{
-      font-size: 10px;
-      color: #888;
-    }}
-    .divider td {{
-      border-bottom: 1px solid #eee;
-      padding: 0;
-      height: 1px;
-    }}
-    .total-row td {{
-      font-weight: bold;
-      font-size: 13px;
-      padding-top: 6px;
-    }}
-    .bank-box {{
-      background: {bank_bg};
-      border: 1px solid {bank_border};
-      padding: 6px 8px;
-      margin-top: 8px;
-      font-size: 10px;
-    }}
-    .bank-alert {{
-      color: #b45309;
-      font-weight: bold;
-      margin-bottom: 3px;
-    }}
-    .transfer {{
-      color: #b45309;
-      font-weight: bold;
-    }}
-    .footer {{
-      border-top: 1px solid #eee;
-      margin-top: 8px;
-      padding-top: 4px;
-      font-size: 9px;
-      color: #ccc;
-    }}
-    .footer-right {{
-      text-align: right;
-    }}
-  </style>
-</head>
-<body>
-<div class="card">
-
-  <div class="header">
-    <img src="{STORE_LOGO_URL}" class="logo" alt="{STORE_NAME}">
-    <p class="store-name">{STORE_NAME}</p>
-    <p class="slogan">{STORE_SLOGAN}</p>
-  </div>
-
-  <div class="total-block">
-    <div class="total-amount">{total}</div>
-    <div class="total-label">Total</div>
-  </div>
-
-  <table>
-    {'<tr><td colspan="2" class="meta">' + " &nbsp;|&nbsp; ".join(([f"Empleado: {employee_name}"] if employee_name else []) + ([f"TPV: {pos_device}"] if pos_device else [])) + '</td></tr>' if employee_name or pos_device else ''}
-    {'<tr><td colspan="2" style="font-size:11px;padding:4px 0;border-bottom:1px solid #eee;">Cliente: <b>' + customer_name + '</b>' + (f'<br/><span style="color:#999">{customer_phone}</span>' if customer_phone else '') + '</td></tr>' if customer_name else ''}
-    {rows_html}
-    <tr class="total-row">
-      <td>Total</td>
-      <td style="text-align:right">{total}</td>
-    </tr>
-    {payments_html}
-  </table>
-
-  <div class="bank-box">
-    {'<div class="bank-alert">Pago pendiente por transferencia</div>' if has_transfer else ''}
-    <div style="{'font-weight:bold;color:#78350f' if has_transfer else ''}">
-      Transferencias a:<br/>
-      <b>{BANK_HOLDER}</b><br/>
-      {BANK_NAME}<br/>
-      {BANK_ACCOUNT}<br/>
-      {BANK_RUT}
-    </div>
-  </div>
-
-  <table class="footer">
-    <tr>
-      <td>{created_at}</td>
-      <td class="footer-right">N&deg; {receipt_number}</td>
-    </tr>
-  </table>
-
-</div>
-</body>
-</html>"""
-    else:
-        return f"""<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
@@ -404,29 +238,6 @@ def _build_receipt_html(receipt: dict, customer_name: str,
   </table>
 </body>
 </html>"""
-
-
-# ── Generador de PDF ──────────────────────────────────────────────────────────
-
-def _generate_pdf(receipt: dict, customer_name: str,
-                  customer_phone: str = "") -> bytes | None:
-    try:
-        from io import BytesIO
-        from xhtml2pdf import pisa
-        html_str = _build_receipt_html(receipt, customer_name,
-                                       customer_phone, for_pdf=True)
-        buf = BytesIO()
-        result = pisa.CreatePDF(html_str, dest=buf)
-        if result.err:
-            log.error(f"xhtml2pdf error: {result.err}")
-            return None
-        return buf.getvalue()
-    except ImportError:
-        log.warning("xhtml2pdf no instalado — se omite el PDF adjunto.")
-        return None
-    except Exception as e:
-        log.error(f"Error generando PDF: {e}")
-        return None
 
 
 # ── Gmail API ─────────────────────────────────────────────────────────────────
@@ -450,7 +261,7 @@ def _get_gmail_service():
 def send_receipt_email(receipt: dict, customer_email: str,
                        customer_name: str, customer_phone: str = "") -> bool:
     receipt_number = receipt.get("receipt_number", "comprobante")
-    subject = f"Tu comprobante de compra #{receipt_number} — {STORE_NAME}"
+    subject        = f"Recibo de {STORE_NAME}"
 
     total      = _fmt_money(receipt.get("total_money"))
     created_at = _fmt_date(receipt.get("created_at"))
@@ -465,31 +276,16 @@ def send_receipt_email(receipt: dict, customer_email: str,
         f"Este correo fue generado automáticamente."
     )
 
-    msg            = MIMEMultipart("mixed")
+    msg            = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = f"{STORE_NAME} <{GMAIL_USER}>"
     msg["To"]      = customer_email
 
-    alt_part = MIMEMultipart("alternative")
-    alt_part.attach(MIMEText(plain_text, "plain", "utf-8"))
-    alt_part.attach(MIMEText(
-        _build_receipt_html(receipt, customer_name, customer_phone, for_pdf=False),
+    msg.attach(MIMEText(plain_text, "plain", "utf-8"))
+    msg.attach(MIMEText(
+        _build_receipt_html(receipt, customer_name, customer_phone),
         "html", "utf-8",
     ))
-    msg.attach(alt_part)
-
-    # PDF adjunto (opcional)
-    pdf_bytes = _generate_pdf(receipt, customer_name, customer_phone)
-    if pdf_bytes:
-        pdf_part = MIMEApplication(pdf_bytes, _subtype="pdf")
-        pdf_part.add_header(
-            "Content-Disposition", "attachment",
-            filename=f"comprobante_{receipt_number}.pdf",
-        )
-        msg.attach(pdf_part)
-        log.info(f"PDF generado ({len(pdf_bytes)} bytes) para receipt #{receipt_number}")
-    else:
-        log.warning(f"Enviando sin PDF para receipt #{receipt_number}")
 
     try:
         service = _get_gmail_service()
