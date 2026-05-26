@@ -56,21 +56,24 @@ def _fmt_date(iso_str: str | None) -> str:
         return iso_str
 
 
-def _payment_label(payment_type: str | None) -> str:
+def _payment_label(payment: dict) -> str:
+    """Usa el campo 'name' del payment si está disponible, si no el tipo genérico."""
+    name = (payment.get("name") or "").strip()
+    if name:
+        return name
+    ptype = (payment.get("type") or payment.get("payment_type") or "").upper()
     labels = {
         "CASH":         "Efectivo",
         "CARD":         "Tarjeta",
         "LOYALTY_CARD": "Tarjeta de fidelidad",
-        "OTHER":        "Otro",
-        "CUSTOM_1":     "Transferencia pendiente",
-        "CUSTOM_2":     "Transferencia pendiente",
-        "CUSTOM_3":     "Transferencia pendiente",
     }
-    return labels.get((payment_type or "").upper(), payment_type or "—")
+    return labels.get(ptype, ptype or "—")
 
 
-def _is_transfer(payment_type: str | None) -> bool:
-    return "transferencia" in _payment_label(payment_type).lower()
+def _is_transfer(payment: dict) -> bool:
+    """Detecta si el pago es transferencia pendiente por el nombre."""
+    label = _payment_label(payment).lower()
+    return "pendiente" in label
 
 
 # ── HTML compartido (email y PDF) ─────────────────────────────────────────────
@@ -86,7 +89,7 @@ def _build_receipt_html(receipt: dict, customer_name: str,
     employee_name  = receipt.get("employee_name", "")
     pos_device     = receipt.get("pos_device_name", "")
 
-    has_transfer = any(_is_transfer(p.get("payment_type")) for p in payments)
+    has_transfer = any(_is_transfer(p) for p in payments)
 
     # Filas de productos
     rows_html = ""
@@ -108,9 +111,9 @@ def _build_receipt_html(receipt: dict, customer_name: str,
     # Filas de pagos
     payments_html = ""
     for p in payments:
-        label    = _payment_label(p.get("payment_type"))
+        label    = _payment_label(p)
         amount   = _fmt_money(p.get("money_amount"))
-        is_trans = _is_transfer(p.get("payment_type"))
+        is_trans = _is_transfer(p)
         style    = "font-weight:bold;color:#b45309;" if is_trans else "color:#666;"
         payments_html += f"""
         <tr>
