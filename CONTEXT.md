@@ -13,7 +13,7 @@ Servidor Flask corriendo en Railway que integra dos sistemas:
 |---|---|
 | `sync_core.py` | Lógica compartida: llamadas a APIs de PCO y Loyverse, sincronización de clientes |
 | `webhook.py` | Servidor Flask con dos endpoints: `/webhook/pco` y `/webhook/loyverse` |
-| `receipt_mailer.py` | Genera el HTML/PDF del comprobante y lo envía por email |
+| `receipt_mailer.py` | Genera el HTML del comprobante y lo envía por email via Gmail API |
 | `cron.py` | Sincronización masiva programada (independiente del webhook) |
 | `register_webhook.py` | Script de uso único para registrar webhooks en Loyverse vía API |
 | `Dockerfile` | Imagen Python 3.12 slim, corre gunicorn |
@@ -37,8 +37,10 @@ Servidor Flask corriendo en Railway que integra dos sistemas:
 | `PCO_APP_ID` | Application ID de Planning Center |
 | `PCO_SECRET` | Secret de Planning Center |
 | `WEBHOOK_SECRET` | Secreto para verificar firma de webhooks de PCO |
-| `GMAIL_USER` | Cuenta Gmail para envío de correos |
-| `GMAIL_APP_PASS` | App Password de Google (16 caracteres) |
+| `GMAIL_USER` | Cuenta Gmail para envío (`it.ipdv@gmail.com`) |
+| `GOOGLE_CLIENT_ID` | Client ID de Google Cloud OAuth2 |
+| `GOOGLE_CLIENT_SECRET` | Client Secret de Google Cloud OAuth2 |
+| `GOOGLE_REFRESH_TOKEN` | Refresh token OAuth2 (obtenido con `get_token.py`) |
 | `STORE_NAME` | Nombre del negocio (ej: "Cafetería IPDV") |
 | `STORE_SUBTITLE` | Subtítulo (ej: "Cafetería IPDV") |
 | `STORE_SLOGAN` | Slogan que aparece en el comprobante |
@@ -61,8 +63,7 @@ Venta pagada en iPad (Loyverse POS)
   → Si el cliente no tiene email → omitir
   → send_receipt_email(receipt, email, nombre)
     → Genera HTML del comprobante
-    → Genera PDF adjunto
-    → Envía por Gmail SMTP
+    → Envía via Gmail API (OAuth2, no SMTP)
 ```
 
 ### Condiciones para enviar:
@@ -72,29 +73,27 @@ Venta pagada en iPad (Loyverse POS)
 
 ---
 
-## Estado actual de los problemas
+## Estado actual
 
-### ✅ Resuelto
+### ✅ Funcionando
 - Webhook de Loyverse configurado y activo (desde UI: `r.loyverse.com/dashboard/#/webhooks`)
 - Evento: "Recibo creado o actualizado"
 - El servidor recibe y procesa los receipts correctamente
-- Lógica de comprobante HTML funciona (diseño fiel al ticket de Loyverse)
-- Detección de "Transferencia pendiente" con alerta visual en amarillo
+- Envío de email via Gmail API OAuth2 (Railway bloquea SMTP, la API funciona vía HTTPS)
+- Diseño del comprobante fiel al ticket de Loyverse
+- Método de pago con label correcto (usa campo `name` del payload, no el `type`)
+- "Transf. Pendiente" resaltado en naranja con datos bancarios en fondo amarillo
+- Nota del cajero aparece cuando existe
 
-### ❌ Pendiente — PRIORIDAD 1: Envío de email
-**Problema**: Railway bloquea conexiones SMTP salientes (puertos 465 y 587).
-**Solución acordada**: reemplazar `smtplib` por **Resend** (resend.com).
-- Resend funciona vía HTTPS (no SMTP), Railway no lo bloquea
-- Plan gratuito: 3.000 emails/mes (suficiente para ~40 ventas/día con cliente)
-- Requiere crear cuenta en resend.com y obtener API key (`re_...`)
-- Cambio en código: reemplazar el bloque `smtplib.SMTP` en `receipt_mailer.py`
+### ❌ Pendiente — PDF adjunto
+**Problema**: todas las librerías probadas son incompatibles con Python 3.12 slim en Railway:
+- WeasyPrint 62.3: `'super' object has no attribute 'transform'`
+- WeasyPrint 60.2: `PDF.__init__() takes 1 positional argument but 3 were given`
+- xhtml2pdf 0.2.16: requiere `pycairo` que necesita compilador C (no disponible en imagen slim)
+**Solución a evaluar**: usar imagen `python:3.12` (no slim) en Dockerfile para tener gcc disponible, o buscar alternativa que no requiera compilación.
 
-### ❌ Pendiente — PRIORIDAD 2: PDF adjunto
-**Problema**: WeasyPrint es incompatible con Python 3.12 en Railway.
-- Error: `'super' object has no attribute 'transform'` (WeasyPrint 62.3)
-- Error: `PDF.__init__() takes 1 positional argument but 3 were given` (WeasyPrint 60.2)
-**Solución a evaluar**: probar `xhtml2pdf` como reemplazo (más liviano, sin dependencias del sistema).
-- Ya se intentó pero se descartó temporalmente para resolver primero el email
+### 🔲 Pendiente — campo "order" del receipt
+El campo `order` viene con el nombre del cliente cuando el pedido fue guardado antes de finalizar la venta. Hay que definir la lógica de cuándo mostrarlo. El usuario explicará con un ejemplo concreto.
 
 ---
 
@@ -105,24 +104,54 @@ Logo: https://res.cloudinary.com/dtbnavw3j/image/upload/v1777608874/Logo_IPDV_k0
 Estructura visual (fiel al ticket físico de Loyverse):
 - Logo + nombre tienda + slogan
 - Total destacado grande
-- Empleado y TPV
 - Cliente con teléfono
+- Nota del cajero (si existe, en itálica)
 - Líneas de productos (nombre, cantidad × precio unitario, total)
 - Total
-- Método de pago (si es "Transferencia pendiente" → resaltado en naranjo)
+- Método de pago — si es "Transf. Pendiente" → resaltado en naranja
 - Datos bancarios (siempre visibles, fondo amarillo si hay transferencia pendiente)
 - Fecha y número de comprobante
 
 ---
 
+## Notas técnicas importantes
+
+### Gmail API OAuth2
+- Proyecto en Google Cloud: `loyverse-sync`
+- Pantalla de consentimiento en modo prueba — usuario autorizado: `it.ipdv@gmail.com`
+- Si el refresh token expira, correr `get_token.py` localmente para obtener uno nuevo
+- Warning cosmético en logs: `file_cache is only supported with oauth2client<4.0.0` — no afecta funcionamiento
+
+### Webhook de Loyverse
+- Loyverse desactiva el webhook automáticamente si el servidor no responde (WORKER TIMEOUT)
+- Para reactivarlo: `r.loyverse.com/dashboard/#/webhooks` → Editar → Activado → Guardar
+- El campo `payment_type` siempre viene como `OTHER` para métodos personalizados
+- El campo `name` del payment tiene el nombre real ("Transf. Pendiente", "Transferencia", etc.)
+
+---
+
+## Pendientes futuros
+
+### 🔲 Monitor de estado de servicios
+Crear un dashboard que muestre en tiempo real el estado de todos los servicios:
+- **Loyverse webhook** — verificar si está activo
+- **Loyverse API** — conectividad y autenticación
+- **PCO API** — conectividad y autenticación
+- **Home Assistant** — conectividad
+- **Railway** — estado del servidor
+
+Opciones a evaluar:
+- Endpoint `/status` en Flask que consulta cada servicio
+- Dashboard web simple accesible desde el navegador
+- Alerta automática cuando algún servicio falla
+
+---
+
 ## Próximos pasos
 
-1. Crear cuenta en **resend.com** y obtener API key
-2. Agregar variable `RESEND_API_KEY` en Railway
-3. Actualizar `receipt_mailer.py`: reemplazar bloque SMTP por llamada HTTP a Resend
-4. Actualizar `requirements.txt`: agregar `resend` o usar `requests` (ya instalado)
-5. Hacer push y probar con venta real
-6. Una vez funcionando el email, resolver el PDF con `xhtml2pdf`
+1. Definir lógica del campo `order` con ejemplo concreto
+2. Resolver PDF adjunto (evaluar imagen no-slim en Dockerfile)
+3. Implementar monitor de estado de servicios
 
 ---
 
