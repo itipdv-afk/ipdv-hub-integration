@@ -37,13 +37,6 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
-@app.route("/debug/tailscale", methods=["GET"])
-def debug_tailscale():
-    import subprocess
-    result = subprocess.run(["tailscale", "status"], capture_output=True, text=True)
-    return jsonify({"output": result.stdout, "error": result.stderr})
-    
-    
 # ── Webhook PCO ───────────────────────────────────────────────────────────────
 
 @app.route("/webhook/pco", methods=["POST"])
@@ -144,6 +137,7 @@ def webhook_loyverse():
         customer_id    = receipt.get("customer_id")
 
         log.info(f"Loyverse receipt recibido: #{receipt_number} | customer_id: {customer_id or 'ninguno'}")
+        log.info(f"Payments raw: {receipt.get('payments')}")  # ← agregar esta línea
 
         if not customer_id:
             log.info(f"Receipt #{receipt_number}: sin cliente, se omite.")
