@@ -26,8 +26,8 @@ GOOGLE_CLIENT_ID     = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 GOOGLE_REFRESH_TOKEN = os.environ["GOOGLE_REFRESH_TOKEN"]
 STORE_NAME     = os.getenv("STORE_NAME", "Cafetería IPDV")
-STORE_SUBTITLE = os.getenv("STORE_SUBTITLE", "Cafetería IPDV")
-STORE_SLOGAN   = os.getenv("STORE_SLOGAN", "El Señor guarde tu vida y seas luz y bendición a otros")
+STORE_SUBTITLE = os.getenv("STORE_SUBTITLE", "Iglesia Presbiteriana del Valle de Lonquén")
+STORE_SLOGAN   = os.getenv("STORE_SLOGAN", "El Señor guarde tu vida, seas luz y bendición (Núm. 6:24-25)")
 STORE_LOGO_URL = os.getenv("STORE_LOGO_URL", "https://res.cloudinary.com/dtbnavw3j/image/upload/v1777608874/Logo_IPDV_k0fstz.png")
 
 BANK_NAME    = os.getenv("BANK_NAME",    "Banco Estado")
@@ -180,7 +180,7 @@ def _build_receipt_html(receipt: dict, customer_name: str,
         <tr>
           <td colspan="2" style="padding:6px 0 8px;font-size:11px;color:#666;
                                   font-style:italic;border-bottom:1px solid #eeeeee;">
-            Nota: {note}
+            {note}
           </td>
         </tr>"""
 
