@@ -42,7 +42,7 @@ Servidor Flask corriendo en Railway que integra dos sistemas:
 | `GOOGLE_CLIENT_SECRET` | Client Secret de Google Cloud OAuth2 |
 | `GOOGLE_REFRESH_TOKEN` | Refresh token OAuth2 (obtenido con `get_token.py`) |
 | `STORE_NAME` | Nombre del negocio (ej: "Cafetería IPDV") |
-| `STORE_SUBTITLE` | Subtítulo (ej: "Cafetería IPDV") |
+| `STORE_SUBTITLE` | Subtítulo (ej: "Iglesia Presbiteriana del Valle de Lonquén") |
 | `STORE_SLOGAN` | Slogan que aparece en el comprobante |
 | `STORE_LOGO_URL` | URL pública del logo (Cloudinary) |
 | `BANK_NAME` | Nombre del banco (ej: "Banco Estado") |
@@ -62,7 +62,8 @@ Venta pagada en iPad (Loyverse POS)
   → GET /customers/{customer_id} en API de Loyverse
   → Si el cliente no tiene email → omitir
   → send_receipt_email(receipt, email, nombre)
-    → Genera HTML del comprobante
+    → Detecta si es SALE o REFUND
+    → Genera HTML del comprobante según tipo
     → Envía via Gmail API (OAuth2, no SMTP)
 ```
 
@@ -83,14 +84,14 @@ Venta pagada en iPad (Loyverse POS)
 - Diseño del comprobante fiel al ticket de Loyverse
 - Método de pago con label correcto (usa campo `name` del payload, no el `type`)
 - "Transf. Pendiente" resaltado en naranja con datos bancarios en fondo amarillo
-- Nota del cajero aparece cuando existe
-
-### ❌ Pendiente — PDF adjunto
-**Problema**: todas las librerías probadas son incompatibles con Python 3.12 slim en Railway:
-- WeasyPrint 62.3: `'super' object has no attribute 'transform'`
-- WeasyPrint 60.2: `PDF.__init__() takes 1 positional argument but 3 were given`
-- xhtml2pdf 0.2.16: requiere `pycairo` que necesita compilador C (no disponible en imagen slim)
-**Solución a evaluar**: usar imagen `python:3.12` (no slim) en Dockerfile para tener gcc disponible, o buscar alternativa que no requiera compilación.
+- Nota del cajero aparece cuando existe (en itálica)
+- Asunto del correo: "Recibo de Cafetería IPDV"
+- Reembolsos (`receipt_type: REFUND`) tratados diferente:
+  - Asunto: "Reembolso de Cafetería IPDV"
+  - Banner rojo con número del comprobante original (`refund_for`)
+  - Etiqueta del monto dice "Reembolso" en lugar de "Total"
+  - Sin bloque de datos bancarios
+- PDF eliminado del flujo (incompatible con Python 3.12 slim, descartado)
 
 ### 🔲 Pendiente — campo "order" del receipt
 El campo `order` viene con el nombre del cliente cuando el pedido fue guardado antes de finalizar la venta. Hay que definir la lógica de cuándo mostrarlo. El usuario explicará con un ejemplo concreto.
@@ -101,16 +102,22 @@ El campo `order` viene con el nombre del cliente cuando el pedido fue guardado a
 
 Logo: https://res.cloudinary.com/dtbnavw3j/image/upload/v1777608874/Logo_IPDV_k0fstz.png
 
-Estructura visual (fiel al ticket físico de Loyverse):
-- Logo + nombre tienda + slogan
+### Venta normal (SALE)
+- Logo + nombre tienda + subtítulo + slogan
 - Total destacado grande
 - Cliente con teléfono
 - Nota del cajero (si existe, en itálica)
 - Líneas de productos (nombre, cantidad × precio unitario, total)
 - Total
 - Método de pago — si es "Transf. Pendiente" → resaltado en naranja
-- Datos bancarios (siempre visibles, fondo amarillo si hay transferencia pendiente)
+- Datos bancarios (fondo amarillo si hay transferencia pendiente, gris si no)
 - Fecha y número de comprobante
+
+### Reembolso (REFUND)
+- Igual que venta normal pero:
+- Banner rojo: "Reembolso — Anulación del comprobante N° X"
+- Etiqueta del monto: "Reembolso"
+- Sin datos bancarios
 
 ---
 
@@ -127,35 +134,37 @@ Estructura visual (fiel al ticket físico de Loyverse):
 - Para reactivarlo: `r.loyverse.com/dashboard/#/webhooks` → Editar → Activado → Guardar
 - El campo `payment_type` siempre viene como `OTHER` para métodos personalizados
 - El campo `name` del payment tiene el nombre real ("Transf. Pendiente", "Transferencia", etc.)
+- El campo `receipt_type` puede ser `SALE` o `REFUND`
+- El campo `refund_for` contiene el número del comprobante original cuando es reembolso
 
 ---
 
 ## Pendientes futuros
 
+### 🔲 Panel de administración web (PRIORIDAD)
+Interfaz simple accesible desde el navegador para:
+- Editar datos de la tienda (nombre, slogan, logo)
+- Editar datos bancarios (banco, cuenta, RUT, titular)
+- Ver estado de los servicios (Loyverse webhook, APIs, Railway)
+- Ver log de últimos comprobantes enviados
+
 ### 🔲 Monitor de estado de servicios
-Crear un dashboard que muestre en tiempo real el estado de todos los servicios:
 - **Loyverse webhook** — verificar si está activo
 - **Loyverse API** — conectividad y autenticación
 - **PCO API** — conectividad y autenticación
 - **Home Assistant** — conectividad
 - **Railway** — estado del servidor
 
-Opciones a evaluar:
-- Endpoint `/status` en Flask que consulta cada servicio
-- Dashboard web simple accesible desde el navegador
-- Alerta automática cuando algún servicio falla
+### 🔲 Campo "order" del receipt
+Definir lógica de cuándo mostrar el campo `order` con ejemplo concreto.
 
 ---
 
 ## Próximos pasos
 
-1. **Panel de administración web** (PRIORIDAD) — interfaz simple accesible desde el navegador para:
-   - Editar datos de la tienda (nombre, slogan, logo)
-   - Editar datos bancarios (banco, cuenta, RUT, titular)
-   - Ver estado de los servicios (Loyverse webhook, APIs, Railway)
-   - Ver log de últimos comprobantes enviados
+1. **Panel de administración web** (PRIORIDAD)
 2. Definir lógica del campo `order` con ejemplo concreto
-3. Resolver PDF adjunto (evaluar imagen no-slim en Dockerfile)
+3. Implementar monitor de estado de servicios
 
 ---
 
