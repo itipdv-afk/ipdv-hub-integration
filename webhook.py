@@ -171,6 +171,19 @@ def webhook_loyverse():
         "omitidos": skipped,
     }), 200
 
+# ── Consulta Endpoint disponibles ───────────────────────────────────────────────────────────────
+
+@app.route("/routes", methods=["GET"])
+def list_routes():
+    import urllib
+    rules = []
+    for rule in app.url_map.iter_rules():
+        rules.append({
+            "endpoint": rule.endpoint,
+            "methods": sorted(rule.methods - {"HEAD", "OPTIONS"}),
+            "url": str(rule)
+        })
+    return jsonify(sorted(rules, key=lambda x: x["url"]))
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
